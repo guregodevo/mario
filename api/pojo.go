@@ -33,7 +33,7 @@ type WorkflowExecution struct {
 	Version     string            `json:"version,omitempty"`
 	Component   string            `json:"component,omitempty"`
 	MaxRetries  int32             `json:"max_retries,omitempty"`
-	External    bool             `json:"external,omitempty"`
+	External    bool              `json:"external,omitempty"`
 }
 
 type ExecutionsResponse struct {

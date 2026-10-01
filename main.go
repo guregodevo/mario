@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"github.com/guregodevo/mario/engine"
-	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/scheduler"
 	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/utils"
 	"github.com/guregodevo/mario/workflow"
+	"os"
 	"time"
 )
 
@@ -35,7 +35,8 @@ func main() {
 	executor := scheduler.NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, &factory, engine.NewLocalExecutor(), 3*time.Second)
 	executor.Trigger(taskD.WorkflowInstanceId)
 	if err := executor.WaitForCompletion(); err != nil {
-		logger.Log.Fatal("main", "Execution failed: %v", err)
+		fmt.Fprintf(os.Stderr, "execution failed: %v\n", err)
+		os.Exit(1)
 	}
 	fmt.Println("All tasks completed successfully!")
 }

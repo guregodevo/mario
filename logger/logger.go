@@ -1,67 +1,18 @@
+// Package logger is how the engine logs. Log is an interface in the shape
+// every Go structured logger already has — slog's — so a host program hands
+// the engine its own logger and nothing adapts: Memdoor's pkg/ declares the
+// same four methods and its gateway logger satisfies both.
 package logger
 
-import (
-	"fmt"
-	"github.com/sirupsen/logrus"
-	"os"
-)
+import "log/slog"
 
-type MarioLogger struct {
-	*logrus.Logger
+// Logger is the four methods the engine uses. *slog.Logger satisfies it.
+type Logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+	Debug(msg string, args ...any)
 }
 
-// Log is the instance of the custom logger
-var Log *MarioLogger
-
-// ANSI escape codes for text formatting
-var infoColor string
-var warnColor string
-var errorColor string
-var debugColor string
-var fatalColor string
-
-func init() {
-	// Initialize logrus logger
-	logrusLogger := logrus.New()
-	logrusLogger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp: true,
-	})
-
-	colorize := os.Getenv("COLORIZE_LOGS") == "true"
-	if colorize {
-		infoColor = "\033[1;34m%s\033[0m"
-		warnColor = "\033[1;33m%s\033[0m"
-		errorColor = "\033[1;31m%s\033[0m"
-		debugColor = "\033[0;36m%s\033[0m"
-		fatalColor = "\033[1;41m%s\033[0m"
-	} else {
-		infoColor = "%s"
-		warnColor = "%s"
-		errorColor = "%s"
-		debugColor = "%s"
-		fatalColor = "%s"
-	}
-
-	// Initialize custom logger
-	Log = &MarioLogger{logrusLogger}
-}
-
-func (l *MarioLogger) Info(context, msg string, args ...interface{}) {
-	l.Infof(infoColor, fmt.Sprintf("[LOG %s] %s", context, fmt.Sprintf(msg, args...)))
-}
-
-func (l *MarioLogger) Warn(context, msg string, args ...interface{}) {
-	l.Warnf(warnColor, fmt.Sprintf("[LOG %s] %s", context, fmt.Sprintf(msg, args...)))
-}
-
-func (l *MarioLogger) Error(context, msg string, args ...interface{}) {
-	l.Errorf(errorColor, fmt.Sprintf("[LOG %s] %s", context, fmt.Sprintf(msg, args...)))
-}
-
-func (l *MarioLogger) Debug(context, msg string, args ...interface{}) {
-	l.Debugf(debugColor, fmt.Sprintf("[LOG %s] %s", context, fmt.Sprintf(msg, args...)))
-}
-
-func (l *MarioLogger) Fatal(context, msg string, args ...interface{}) {
-	l.Fatalf(fatalColor, fmt.Sprintf("[LOG %s] %s", context, fmt.Sprintf(msg, args...)))
-}
+// Log is the engine's logger: slog's default until a host sets its own.
+var Log Logger = slog.Default()

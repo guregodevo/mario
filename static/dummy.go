@@ -12,7 +12,6 @@ func BuilderDummyFn() workflow.WorflowBuilder {
 	return DummyBuilder(0, 0*time.Hour)
 }
 
-
 type DummyDataEndpoint struct {
 	EndpointName     string
 	EndDate          time.Time
@@ -30,10 +29,9 @@ func (t *DummyDataEndpoint) Exists() bool {
 }
 
 type DummyTaskFactory struct {
-	Version string
+	Version   string
 	Partition string
 	Component string
-
 }
 
 func (f *DummyTaskFactory) Name() []string {
@@ -42,7 +40,7 @@ func (f *DummyTaskFactory) Name() []string {
 
 func (f *DummyTaskFactory) Fn(name string) func() error {
 	return func() error {
-		logger.Log.Info("workflow", "Running %v \n", f.Name())
+		logger.Log.Info(fmt.Sprintf("Running %v", f.Name()), "component", "workflow")
 		return nil
 	}
 }
@@ -55,23 +53,17 @@ func (f *DummyTaskFactory) NewDataEndpoint(name string) workflow.DataEndpoint {
 	return &DummyDataEndpoint{EndpointName: name, EndDate: time.Now(), Failures: 0, ExpectedFailures: 0, Complete: false}
 }
 
-
 func (f *DummyTaskFactory) NewWorkflow(name, version, partition, component string) (workflow.WorkflowInstanceId, error) {
-	return DummyBuilder(0, 0 * time.Millisecond).SetWorkflow(name, 0, false, version, component).OfInstance(), nil
+	return DummyBuilder(0, 0*time.Millisecond).SetWorkflow(name, 0, false, version, component).OfInstance(), nil
 }
 
-func (f *DummyTaskFactory) ExecutableOf(instance workflow.WorkflowExecution) workflow.ExecutableWorkflowInstance {
-	return DummyBuilder(0, 0 * time.Millisecond).SetExecution(instance).SetDefaultConcrete().Instance().ToExecutable()
+func (f *DummyTaskFactory) ExecutableOf(instance workflow.WorkflowExecution) *workflow.ExecutableWorkflowInstance {
+	return DummyBuilder(0, 0*time.Millisecond).SetExecution(instance).SetDefaultConcrete().Instance().ToExecutable()
 }
 
-func (f *DummyTaskFactory) NewExecutable(name string) workflow.ExecutableWorkflowInstance {
-	return DummyBuilder(0, 0 * time.Millisecond).SetWorkflow(name, 0, false, f.Version, f.Component).SetRuntime(f.Partition, workflow.Scheduled, 0).SetDefaultConcrete().Instance().ToExecutable()
+func (f *DummyTaskFactory) NewExecutable(name string) *workflow.ExecutableWorkflowInstance {
+	return DummyBuilder(0, 0*time.Millisecond).SetWorkflow(name, 0, false, f.Version, f.Component).SetRuntime(f.Partition, workflow.Scheduled, 0).SetDefaultConcrete().Instance().ToExecutable()
 }
-
-
-
-
-
 
 // DummyWorflowFactory creates and returns a pointer to a StaticWorkflow object with the specified properties.
 // The function takes the following parameters:
@@ -107,11 +99,11 @@ func (f *DummyWorflowFactory) SetDefaultConcrete() workflow.WorflowBuilder {
 	f.Inst.WfOutput = e
 	f.Inst.RunFunc = func() error {
 		time.Sleep(f.sleepDuration)
-		logger.Log.Info("workflow", "Running %v \n", f.Inst.DName)
+		logger.Log.Info(fmt.Sprintf("Running %v", f.Inst.DName), "component", "workflow")
 		e.Failures++
 		e.Complete = e.ExpectedFailures <= e.Failures
 		if !e.Complete {
-			logger.Log.Info("workflow", "fake error %v \n", f.Inst.DName)
+			logger.Log.Info(fmt.Sprintf("fake error %v", f.Inst.DName), "component", "workflow")
 			return fmt.Errorf("fake error")
 		} else {
 			return nil

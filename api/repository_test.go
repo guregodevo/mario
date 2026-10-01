@@ -9,7 +9,10 @@ import (
 func TestRestWorkflowRepository(t *testing.T) {
 	utils.SkipCI(t)
 	// Prepare SQLite repository
-	repo := NewWorkflowRepository(static.BuilderDummyFn)
+	repo, err := NewWorkflowRepository(static.BuilderDummyFn)
+	if err != nil {
+		t.Skip(err) // no API_URL here
+	}
 
 	static.RepositoryTestcases(t, repo)
 }

@@ -1,6 +1,7 @@
 package static
 
 import (
+	"fmt"
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/workflow"
 	"time"
@@ -10,8 +11,10 @@ type CommonExecutable struct {
 	workflow.ExecutableWorkflowInstance
 }
 
-func (t *CommonExecutable) ToExecutable() workflow.ExecutableWorkflowInstance {
-	return t.ExecutableWorkflowInstance
+// ToExecutable hands out THE instance, not a copy: it carries a mutex, and a
+// copied mutex is a different lock (go vet refuses the copy).
+func (t *CommonExecutable) ToExecutable() *workflow.ExecutableWorkflowInstance {
+	return &t.ExecutableWorkflowInstance
 }
 
 func (t *CommonExecutable) Execute() error {
@@ -22,7 +25,7 @@ func (t *CommonExecutable) Execute() error {
 	if t.WfOutput.Exists() {
 		t.Status = workflow.Done
 		t.Mu.Unlock()
-		logger.Log.Info("workflow", "Task %s already %s. Skipping execution.\n", t.DName, t.Status)
+		logger.Log.Info(fmt.Sprintf("Task %s already %s. Skipping execution.", t.DName, t.Status), "component", "workflow")
 		return nil
 
 	}
@@ -31,7 +34,7 @@ func (t *CommonExecutable) Execute() error {
 	t.Mu.Lock()
 	t.Status = workflow.Started
 	t.Mu.Unlock()
-	logger.Log.Info("workflow", "Starting task %s\n", t.DName)
+	logger.Log.Info(fmt.Sprintf("Starting task %s", t.DName), "component", "workflow")
 	err := t.RunFunc()
 	if err != nil {
 		t.Mu.Lock()
@@ -44,6 +47,6 @@ func (t *CommonExecutable) Execute() error {
 	t.Status = workflow.Done
 	t.Mu.Unlock()
 
-	logger.Log.Info("workflow", "Completed task instance %s\n", t.InstanceId())
+	logger.Log.Info(fmt.Sprintf("Completed task instance %s", t.InstanceId()), "component", "workflow")
 	return nil
 }

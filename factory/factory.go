@@ -3,14 +3,13 @@ package factory
 import (
 	"github.com/guregodevo/mario/templates"
 	"github.com/guregodevo/mario/workflow"
-	"log"
 )
 
 type TaskFactory interface {
 	Name() []string
 	NewWorkflow(name, version, partition, component string) (workflow.WorkflowInstanceId, error)
-	NewExecutable(name string) workflow.ExecutableWorkflowInstance
-	ExecutableOf(instance workflow.WorkflowExecution) workflow.ExecutableWorkflowInstance
+	NewExecutable(name string) *workflow.ExecutableWorkflowInstance
+	ExecutableOf(instance workflow.WorkflowExecution) *workflow.ExecutableWorkflowInstance
 	Fn(name string) func() error
 	NewDataEndpoint(name string) workflow.DataEndpoint
 	NewYaml() *templates.YAMLValidator
@@ -18,7 +17,7 @@ type TaskFactory interface {
 
 type Component interface {
 	Add(factory TaskFactory)
-	Get(name string) TaskFactory
+	Get(name string) (TaskFactory, bool)
 }
 
 type MarioComponent struct {
@@ -35,11 +34,10 @@ func (r *MarioComponent) Add(factory TaskFactory) {
 	}
 }
 
-func (r *MarioComponent) Get(name string) TaskFactory {
+// Get answers the factory registered under name, and whether there is one. A
+// library does not exit the process over a missing registration; the caller
+// decides what a DAG with an unknown task type means.
+func (r *MarioComponent) Get(name string) (TaskFactory, bool) {
 	factory, exists := r.factories[name]
-	if exists {
-		return factory
-	}
-	log.Fatalf("Unable to find factory '%s'", name)
-	return nil
+	return factory, exists
 }

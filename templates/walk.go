@@ -94,7 +94,7 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 		}
 		config, funcs, errFunc := fn(taskDef, partition, projectID, datasetID, tableName)
 		if errFunc != nil {
-			logger.Log.Fatal("walk", "Error: %v", errFunc.Error())
+			return fmt.Errorf("task %s: %w", taskDef.Name, errFunc), nil
 		}
 
 		// Process the templatePath files (treat them as templates)
@@ -113,7 +113,7 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 			if _, err = tmpl.New(name).Funcs(funcs).Parse(string(bytes)); err != nil {
 				return fmt.Errorf("error parsing template file %s: %v", path, err)
 			}
-			logger.Log.Infof("Template successfully loaded %s", name)
+			logger.Log.Info(fmt.Sprintf("Template successfully loaded %s", name))
 			return nil
 		})
 

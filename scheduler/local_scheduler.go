@@ -55,7 +55,7 @@ func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue
 	// Require this in your NewLocalScheduler function or any initializer
 	go func() {
 		for err := range e.errCh {
-			logger.Log.Error("local scheduler", "%v\n", err)
+			logger.Log.Error(fmt.Sprintf("%v", err), "component", "local scheduler")
 		}
 	}()
 	if loop {
@@ -71,7 +71,7 @@ func (e *LocalScheduler) DelegateExecution(t workflow.WorkflowInstance) error {
 
 func (e *LocalScheduler) Trigger(id workflow.WorkflowInstanceId) error {
 	atomic.AddInt32(&e.counter, 1)
-	logger.Log.Info("local scheduler", "SUBMIT %v\n", id)
+	logger.Log.Info(fmt.Sprintf("SUBMIT %v", id), "component", "local scheduler")
 	e.taskQueue.Enqueue(id)
 	return nil
 }
@@ -81,34 +81,34 @@ func (e *LocalScheduler) Accept(err error) {
 }
 
 func (e *LocalScheduler) loop() {
-	logger.Log.Debugf("Polling Task queue ...")
+	logger.Log.Debug("Polling Task queue ...")
 	for {
 		taskId, err := e.taskQueue.Dequeue()
 		if err != nil {
-			logger.Log.Error("local scheduler", "Error dequeuing task: %v", err)
+			logger.Log.Error(fmt.Sprintf("Error dequeuing task: %v", err), "component", "local scheduler")
 			return
 		} else {
-			logger.Log.Info("local scheduler", "dequeuing task: %v", taskId)
+			logger.Log.Info(fmt.Sprintf("dequeuing task: %v", taskId), "component", "local scheduler")
 		}
 
 		e.Start(taskId)
 	}
 }
 
-func (e *LocalScheduler) fetchOrCreate(name, partition string) workflow.ExecutableWorkflowInstance {
+func (e *LocalScheduler) fetchOrCreate(name, partition string) *workflow.ExecutableWorkflowInstance {
 	id := workflow.InstanceIdOf(name, partition)
 	// Fetch and create must be atomic, otherwise concurrent callers create duplicate executions of the same instance.
 	e.createMu.Lock()
 	defer e.createMu.Unlock()
 	exe, ok := e.repository.Fetch(id)
-	var t workflow.ExecutableWorkflowInstance
+	var t *workflow.ExecutableWorkflowInstance
 	if !ok {
 		t = e.taskFactory.NewExecutable(name)
 		e.repository.Upsert(t.WorkflowExecution)
-		logger.Log.Warn("local scheduler", "Creating task id %s name:%s partition:%s --> %s tPartition %s \n", id, name, partition, t.InstanceId(), t.Partition)
+		logger.Log.Warn(fmt.Sprintf("Creating task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
 	} else {
-		logger.Log.Warn("local scheduler", "Got task id %s name:%s partition:%s --> %s tPartition %s \n", id, name, partition, t.InstanceId(), t.Partition)
 		t = e.taskFactory.ExecutableOf(exe)
+		logger.Log.Warn(fmt.Sprintf("Got task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
 	}
 	return t
 }
@@ -156,51 +156,51 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 	go func(id workflow.WorkflowInstanceId) {
 		defer e.wg.Done()
 		defer atomic.AddInt32(&e.counter, -1)
-		logger.Log.Info("local scheduler", "Starting task %v \n", id)
+		logger.Log.Info(fmt.Sprintf("Starting task %v", id), "component", "local scheduler")
 
 		t := e.fetchOrCreate(id.WorkflowName(), id.Partition)
-		logger.Log.Info("local scheduler", "Fetch task %s isExternal: %v\n", t.InstanceId(), t.IsExternal())
+		logger.Log.Info(fmt.Sprintf("Fetch task %s isExternal: %v", t.InstanceId(), t.IsExternal()), "component", "local scheduler")
 
 		if t.IsExternal() {
-			logger.Log.Info("local scheduler", "Skipping task %s. Is External\n", t.InstanceId())
+			logger.Log.Info(fmt.Sprintf("Skipping task %s. Is External", t.InstanceId()), "component", "local scheduler")
 			return
 		}
 
 		if !e.backfill && t.GetStatus() == workflow.Done {
-			logger.Log.Info("local scheduler", "Skipping task %s. Already done\n", t.InstanceId())
+			logger.Log.Info(fmt.Sprintf("Skipping task %s. Already done", t.InstanceId()), "component", "local scheduler")
 			return
 		}
 
 		if e.isCompleted(t.InstanceId()) {
-			logger.Log.Info("local scheduler", "Skipping task %s. Already completed in this run\n", t.InstanceId())
+			logger.Log.Info(fmt.Sprintf("Skipping task %s. Already completed in this run", t.InstanceId()), "component", "local scheduler")
 			return
 		}
 
 		// When backfilling, a task left Started by a previous run is restarted, unless it is running in this scheduler.
 		if (!e.backfill && t.GetStatus() == workflow.Started) || e.isRunning(t.InstanceId()) {
-			logger.Log.Info("local scheduler", "Skipping task %s. Already started\n", t.InstanceId())
+			logger.Log.Info(fmt.Sprintf("Skipping task %s. Already started", t.InstanceId()), "component", "local scheduler")
 			return
 		}
 
 		// Check for dependencies
-		logger.Log.Info("local scheduler", "Checking task '%s' dependencies\n", t.InstanceId())
+		logger.Log.Info(fmt.Sprintf("Checking task '%s' dependencies", t.InstanceId()), "component", "local scheduler")
 		missingDeps := make([]workflow.WorkflowInstanceId, 0)
 		for depName, _ := range e.repository.Upstreams(t.WorkflowName(), id.Version()) {
-			logger.Log.Info("local scheduler", "Checking %s ...\n", workflow.InstanceIdOf(depName, id.Partition))
+			logger.Log.Info(fmt.Sprintf("Checking %s ...", workflow.InstanceIdOf(depName, id.Partition)), "component", "local scheduler")
 
 			dep := e.fetchOrCreate(depName, id.Partition)
 			if dep.Status != workflow.Done {
 				missingdep := fmt.Errorf(" %s Job Status %d", dep.Target().Name(), dep.GetStatus())
 				if dep.Target().Exists() {
-					logger.Log.Info("local scheduler", "Skipping %s ...\n", missingdep)
+					logger.Log.Info(fmt.Sprintf("Skipping %s ...", missingdep), "component", "local scheduler")
 					dep.SetStatus(workflow.Done)
 					e.repository.Upsert(dep.WorkflowExecution)
 				} else {
-					logger.Log.Error("local scheduler", "Missing %s ...\n", missingdep)
+					logger.Log.Error(fmt.Sprintf("Missing %s ...", missingdep), "component", "local scheduler")
 					missingDeps = append(missingDeps, dep.WorkflowInstanceId)
 				}
 			} else {
-				logger.Log.Info("local scheduler", "Found %s ...\n", dep.InstanceId())
+				logger.Log.Info(fmt.Sprintf("Found %s ...", dep.InstanceId()), "component", "local scheduler")
 			}
 
 		}
@@ -215,27 +215,27 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 					}
 				}
 			}
-			logger.Log.Error("local scheduler", "Missing %s version %s component %s deps: %v ...\n", t.InstanceId(), t.Version(), t.Component(), missingDeps)
+			logger.Log.Error(fmt.Sprintf("Missing %s version %s component %s deps: %v ...", t.InstanceId(), t.Version(), t.Component(), missingDeps), "component", "local scheduler")
 			return
 		}
 
 		instanceId := t.InstanceId()
 		if !e.claim(instanceId) {
-			logger.Log.Info("local scheduler", "Skipped task %s. Already running or completed \n", instanceId)
+			logger.Log.Info(fmt.Sprintf("Skipped task %s. Already running or completed", instanceId), "component", "local scheduler")
 			return
 		}
 		// The status may have changed since the first fetch.
 		t = e.fetchOrCreate(t.WorkflowName(), t.Partition)
 		if !e.backfill && (t.GetStatus() == workflow.Started || t.GetStatus() == workflow.Done) {
 			e.release(instanceId)
-			logger.Log.Info("local scheduler", "Skipped task %s. Already %v \n", instanceId, t.GetStatus())
+			logger.Log.Info(fmt.Sprintf("Skipped task %s. Already %v", instanceId, t.GetStatus()), "component", "local scheduler")
 			return
 		}
 
 		t.SetStatus(workflow.Started)
 		t.StartDate = time.Now()
 		e.repository.Upsert(t.WorkflowExecution)
-		logger.Log.Info("local scheduler", "Started task %s\n", instanceId)
+		logger.Log.Info(fmt.Sprintf("Started task %s", instanceId), "component", "local scheduler")
 
 		err := e.executor.Execute(t)
 		t.EndDate = time.Now()
@@ -250,7 +250,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			t.SetStatus(workflow.Done)
 			e.repository.Upsert(t.WorkflowExecution)
 			e.complete(instanceId)
-			logger.Log.Info("local scheduler", "Completed %s\n", instanceId)
+			logger.Log.Info(fmt.Sprintf("Completed %s", instanceId), "component", "local scheduler")
 			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 		}
 	}(taskId)
@@ -258,7 +258,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 
 func (e *LocalScheduler) retry(t workflow.WorkflowInstanceId) {
 	atomic.AddInt32(&e.counter, 1)
-	logger.Log.Info("local scheduler", "Retrying %s\n", t.InstanceId())
+	logger.Log.Info(fmt.Sprintf("Retrying %s", t.InstanceId()), "component", "local scheduler")
 	e.retryQueue.Enqueue(t)
 }
 
@@ -291,12 +291,12 @@ func (e *LocalScheduler) allDependenciesCompleted(taskName, partition, version s
 	return true
 }
 
-func (e *LocalScheduler) handleRetry(rt workflow.ExecutableWorkflowInstance) {
+func (e *LocalScheduler) handleRetry(rt *workflow.ExecutableWorkflowInstance) {
 	defer atomic.AddInt32(&e.counter, -1)
 	<-time.After(e.retryTime)
 	rt.IncRetry()
 	e.repository.Upsert(rt.WorkflowExecution)
-	logger.Log.Error("local scheduler", "Retrying task %s  (retries: %d) \n", rt.Target().Name(), rt.Retries())
+	logger.Log.Error(fmt.Sprintf("Retrying task %s  (retries: %d)", rt.Target().Name(), rt.Retries()), "component", "local scheduler")
 	e.triggerIfRequired(rt.WorkflowExecution)
 }
 
@@ -308,7 +308,7 @@ func (e *LocalScheduler) retryLoop() {
 		default:
 			rTaskId, err := e.retryQueue.Dequeue() // dequeue from retryQueue
 			if err != nil {
-				logger.Log.Info("local scheduler", "Error dequeuing retry task: %v", err)
+				logger.Log.Info(fmt.Sprintf("Error dequeuing retry task: %v", err), "component", "local scheduler")
 				continue
 			}
 			rTaskExe := e.fetchOrCreate(rTaskId.WorkflowName(), rTaskId.Partition)
@@ -318,7 +318,7 @@ func (e *LocalScheduler) retryLoop() {
 			} else {
 				atomic.AddInt32(&e.counter, -1)
 				maxError := fmt.Errorf("Max retries (%d/%d) reached for task %s", rTaskExe.Retries(), rTaskExe.MaxRetries(), rTaskExe.Target().Name())
-				logger.Log.Warn("local scheduler", "Max retries %v ", maxError)
+				logger.Log.Warn(fmt.Sprintf("Max retries %v ", maxError), "component", "local scheduler")
 			}
 		}
 	}
@@ -326,21 +326,21 @@ func (e *LocalScheduler) retryLoop() {
 
 func (e *LocalScheduler) WaitForCompletion() error {
 	for atomic.LoadInt32(&e.counter) > 0 {
-		logger.Log.Info("local scheduler", "%d tasks running ", e.counter)
+		logger.Log.Info(fmt.Sprintf("%d tasks running ", e.counter), "component", "local scheduler")
 		time.Sleep(100 * time.Millisecond)
 	}
-	logger.Log.Info("local scheduler", "%d tasks running ", e.counter)
+	logger.Log.Info(fmt.Sprintf("%d tasks running ", e.counter), "component", "local scheduler")
 
 	e.wg.Wait()
 
-	logger.Log.Info("local scheduler", "Preparing to close task channel")
+	logger.Log.Info("Preparing to close task channel", "component", "local scheduler")
 	e.taskQueue.Close()
-	logger.Log.Info("local scheduler", "Waiting for all tasks to finish execution")
+	logger.Log.Info("Waiting for all tasks to finish execution", "component", "local scheduler")
 
 	e.retryQueue.Close() // Close the retry channel.
 	close(e.errCh)       // Close the error channel.
 
-	logger.Log.Info("local scheduler", "All tasks have finished execution")
+	logger.Log.Info("All tasks have finished execution", "component", "local scheduler")
 	close(e.shutdownCh) // Signal to retryLoop to stop processing.
 
 	select {

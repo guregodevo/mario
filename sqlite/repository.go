@@ -224,7 +224,7 @@ func (r *SqliteWorkflowRepository) fetchWorkflowsByQuery(query string, instanceI
 		if inst, ok := r.Fetch(workflowID); ok {
 			workflows[inst.InstanceId()] = inst
 		} else {
-			logger.Log.Error("sqlite", "cannot find workflow id %s", workflowID)
+			logger.Log.Error(fmt.Sprintf("cannot find workflow id %s", workflowID), "component", "sqlite")
 		}
 	}
 	return workflows

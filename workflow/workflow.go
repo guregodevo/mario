@@ -205,7 +205,7 @@ type WorkflowInstance interface {
 	Target() DataEndpoint
 	String() string
 	Retries() int32
-	ToExecutable() ExecutableWorkflowInstance
+	ToExecutable() *ExecutableWorkflowInstance
 }
 
 type DataEndpoint interface {

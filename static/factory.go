@@ -80,7 +80,7 @@ func (f *StaticWorflowBuilder) SetDefaultConcrete() workflow.WorflowBuilder {
 	f.Inst.WfOutput = e
 
 	f.Inst.RunFunc = func() error {
-		logger.Log.Info("workflow", "Running %v \n", f.Inst.DName)
+		logger.Log.Info(fmt.Sprintf("Running %v", f.Inst.DName), "component", "workflow")
 		return nil
 	}
 	return f

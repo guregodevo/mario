@@ -17,9 +17,9 @@ var dateFormats = map[string]string{
 }
 
 func Format(partition string, layout string) string {
-	logger.Log.Debug("template", "Format %s like %s \n", partition, layout)
+	logger.Log.Debug(fmt.Sprintf("Format %s like %s", partition, layout), "component", "template")
 	partition_date, _, err := ParsePartitionString(partition)
-	logger.Log.Debug("Format", "Format parse partition string %s \n", partition_date)
+	logger.Log.Debug(fmt.Sprintf("Format parse partition string %s", partition_date), "component", "Format")
 	if err != nil {
 		return partition
 	}
@@ -30,10 +30,10 @@ func Format(partition string, layout string) string {
 func ParsePartitionString(partition string) (*time.Time, string, error) {
 	for regex, layout := range dateFormats {
 		if matched, _ := regexp.MatchString(regex, partition); matched {
-			logger.Log.Debug("template", "Matched partition '%s' with regex '%s' and layout '%s'\n", partition, regex, layout)
+			logger.Log.Debug(fmt.Sprintf("Matched partition '%s' with regex '%s' and layout '%s'", partition, regex, layout), "component", "template")
 			parsedDate, err := time.Parse(layout, partition)
 			if err != nil {
-				logger.Log.Error("template", "Failed to parse '%s' with layout '%s': %v\n", partition, layout, err)
+				logger.Log.Error(fmt.Sprintf("Failed to parse '%s' with layout '%s': %v", partition, layout, err), "component", "template")
 				return nil, "", fmt.Errorf("Failed to parse date %s with layout %s: %v", partition, layout, err)
 			}
 			return &parsedDate, parsedDate.Format("20060102"), nil
@@ -151,7 +151,7 @@ func partitionToDate(partition string) (time.Time, error) {
 // FormatPartition converts partition string 2008-08-01 to  "20080801" if given pattern is YYYYMMDD
 func FormatPartition(partition, pattern string) string {
 	if date, e := partitionToDate(partition); e != nil {
-		logger.Log.Error("Format", "Could not parse partition '%s'", partition)
+		logger.Log.Error(fmt.Sprintf("Could not parse partition '%s'", partition), "component", "Format")
 		return ""
 	} else {
 		return PartitionDateFormat(date, pattern)
@@ -186,7 +186,7 @@ func PartitionDateFormat(date time.Time, pattern string) string {
 	case "YYYYMMDDHH":
 		return date.Format("2006010215")
 	default:
-		logger.Log.Error("Format", "Could not find such pattern '%s'", pattern)
+		logger.Log.Error(fmt.Sprintf("Could not find such pattern '%s'", pattern), "component", "Format")
 		return ""
 	}
 }

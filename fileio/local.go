@@ -61,7 +61,7 @@ func (l *LocalFileIO) ExtractInfo(path string) (string, string, string, error) {
 	}
 	tablename := strings.Split(segments[len(segments)-1], ".")[0]
 
-	logger.Log.Debug("yaml", "project_id:%s dataset_id:%s tablename:%s \n", projectID, datasetID, tablename)
+	logger.Log.Debug(fmt.Sprintf("project_id:%s dataset_id:%s tablename:%s", projectID, datasetID, tablename), "component", "yaml")
 
 	return projectID, datasetID, tablename, nil
 }

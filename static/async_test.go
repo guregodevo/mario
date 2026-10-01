@@ -18,12 +18,12 @@ func TestChannelQueue(t *testing.T) {
 	expectedVersion := fmt.Sprintf("%d", time.Now().Unix())
 
 	// Enqueue a task
-	expectedTask := workflow.WorkflowInstanceId{ Partition: "2023-10-11", WorkflowId: workflow.WorkflowId{DVersion: expectedVersion, DName: "TestTask"}}
+	expectedTask := workflow.WorkflowInstanceId{Partition: "2023-10-11", WorkflowId: workflow.WorkflowId{DVersion: expectedVersion, DName: "TestTask"}}
 	if err := cq.Enqueue(expectedTask); err != nil {
 		t.Fatalf("Failed to enqueue task: %v", err)
 	}
 
-	logger.Log.Info("static_queue", "Dequeueing")
+	logger.Log.Info("Dequeueing", "component", "static_queue")
 	receivedTask, _ := cq.Dequeue()
 
 	if expectedTask.InstanceId() != receivedTask.InstanceId() {
