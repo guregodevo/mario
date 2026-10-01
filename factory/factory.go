@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"github.com/guregodevo/mario/templates"
 	"github.com/guregodevo/mario/workflow"
 )
@@ -10,8 +11,13 @@ type TaskFactory interface {
 	NewWorkflow(name, version, partition, component string) (workflow.WorkflowInstanceId, error)
 	NewExecutable(name string) *workflow.ExecutableWorkflowInstance
 	ExecutableOf(instance workflow.WorkflowExecution) *workflow.ExecutableWorkflowInstance
-	Fn(name string) func() error
+	Fn(name string) func(ctx context.Context) error
 	NewDataEndpoint(name string) workflow.DataEndpoint
+}
+
+// YAMLValidated is the optional half of a factory that reads mario's own
+// per-table YAML; a factory for another kind of task does not carry it.
+type YAMLValidated interface {
 	NewYaml() *templates.YAMLValidator
 }
 

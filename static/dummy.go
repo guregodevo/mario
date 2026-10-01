@@ -39,8 +39,8 @@ func (f *DummyTaskFactory) Name() []string {
 	return []string{"dummy"}
 }
 
-func (f *DummyTaskFactory) Fn(name string) func() error {
-	return func() error {
+func (f *DummyTaskFactory) Fn(name string) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
 		logger.Log.Info(fmt.Sprintf("Running %v", f.Name()), "component", "workflow")
 		return nil
 	}
