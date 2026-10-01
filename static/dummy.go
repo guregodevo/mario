@@ -1,6 +1,7 @@
 package static
 
 import (
+	"context"
 	"fmt"
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/templates"
@@ -88,7 +89,7 @@ func DummyBuilder(nbFailures int, sleepDuration time.Duration) workflow.WorflowB
 	}
 }
 
-func (f *DummyWorflowFactory) SetConcrete(wf workflow.DataEndpoint, fn func() error) workflow.WorflowBuilder {
+func (f *DummyWorflowFactory) SetConcrete(wf workflow.DataEndpoint, fn func(ctx context.Context) error) workflow.WorflowBuilder {
 	f.Inst.WfOutput = wf
 	f.Inst.RunFunc = fn
 	return f
@@ -97,8 +98,12 @@ func (f *DummyWorflowFactory) SetConcrete(wf workflow.DataEndpoint, fn func() er
 func (f *DummyWorflowFactory) SetDefaultConcrete() workflow.WorflowBuilder {
 	e := &DummyDataEndpoint{EndpointName: f.Inst.DName, EndDate: time.Now(), Failures: 0, ExpectedFailures: f.nbFailures, Complete: false}
 	f.Inst.WfOutput = e
-	f.Inst.RunFunc = func() error {
-		time.Sleep(f.sleepDuration)
+	f.Inst.RunFunc = func(ctx context.Context) error {
+		select {
+		case <-time.After(f.sleepDuration):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		logger.Log.Info(fmt.Sprintf("Running %v", f.Inst.DName), "component", "workflow")
 		e.Failures++
 		e.Complete = e.ExpectedFailures <= e.Failures

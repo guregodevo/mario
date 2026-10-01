@@ -1,6 +1,7 @@
 package static
 
 import (
+	"context"
 	"fmt"
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/workflow"
@@ -69,7 +70,7 @@ func (f *StaticWorflowBuilder) Instance() workflow.WorkflowInstance {
 	return f.Inst
 }
 
-func (f *StaticWorflowBuilder) SetConcrete(e workflow.DataEndpoint, fn func() error) workflow.WorflowBuilder {
+func (f *StaticWorflowBuilder) SetConcrete(e workflow.DataEndpoint, fn func(ctx context.Context) error) workflow.WorflowBuilder {
 	f.Inst.WfOutput = e
 	f.Inst.RunFunc = fn
 	return f
@@ -79,7 +80,7 @@ func (f *StaticWorflowBuilder) SetDefaultConcrete() workflow.WorflowBuilder {
 	e := &DummyDataEndpoint{EndpointName: f.Inst.DName, EndDate: time.Now(), Failures: 0, ExpectedFailures: 0, Complete: false}
 	f.Inst.WfOutput = e
 
-	f.Inst.RunFunc = func() error {
+	f.Inst.RunFunc = func(ctx context.Context) error {
 		logger.Log.Info(fmt.Sprintf("Running %v", f.Inst.DName), "component", "workflow")
 		return nil
 	}

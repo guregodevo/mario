@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -52,7 +53,7 @@ func InstanceIdOf(name, partition string) string {
 type ExecutableWorkflowInstance struct {
 	WorkflowExecution
 	WfOutput DataEndpoint
-	RunFunc  func() error
+	RunFunc  func(ctx context.Context) error
 	Mu       sync.Mutex
 }
 
@@ -220,7 +221,7 @@ type WorflowBuilder interface {
 	SetDefaultConcrete() WorflowBuilder
 	SetConcrete(
 		WfOutput DataEndpoint,
-		RunFunc func() error) WorflowBuilder
+		RunFunc func(ctx context.Context) error) WorflowBuilder
 	Of() WorkflowExecution
 	OfInstance() WorkflowInstanceId
 	OfWorkflow() WorkflowId

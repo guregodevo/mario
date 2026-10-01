@@ -1,6 +1,7 @@
 package static
 
 import (
+	"context"
 	"fmt"
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/workflow"
@@ -17,7 +18,7 @@ func (t *CommonExecutable) ToExecutable() *workflow.ExecutableWorkflowInstance {
 	return &t.ExecutableWorkflowInstance
 }
 
-func (t *CommonExecutable) Execute() error {
+func (t *CommonExecutable) Execute(ctx context.Context) error {
 
 	// Check if the task has already been started or completed
 	t.Mu.Lock()
@@ -35,7 +36,7 @@ func (t *CommonExecutable) Execute() error {
 	t.Status = workflow.Started
 	t.Mu.Unlock()
 	logger.Log.Info(fmt.Sprintf("Starting task %s", t.DName), "component", "workflow")
-	err := t.RunFunc()
+	err := t.RunFunc(ctx)
 	if err != nil {
 		t.Mu.Lock()
 		t.Status = workflow.Failed

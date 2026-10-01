@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,30 @@ type LocalScheduler struct {
 	runningMu   sync.Mutex
 	running     map[string]bool
 	completed   map[string]bool
+	ctx         context.Context // the run's context: cancelled, nothing more starts
+	events      Events          // nil-safe; see Events
+}
+
+// Events is what a host may watch: every transition a task makes, named by
+// its workflow and partition so the host needs no type of this package to
+// listen. Declared here, in the engine, as the shape a listener satisfies;
+// every method is optional in spirit — a host implements the interface and
+// ignores what it does not need.
+type Events interface {
+	TaskStarted(name, partition string)
+	TaskDone(name, partition string)
+	TaskFailed(name, partition string, err error, willRetry bool)
+}
+
+// SetEvents installs a listener; nil removes it.
+func (e *LocalScheduler) SetEvents(ev Events) { e.events = ev }
+
+// SetContext makes a run cancellable: once ctx is done no further task
+// starts, and the executor sees the same ctx for the task it is running.
+func (e *LocalScheduler) SetContext(ctx context.Context) {
+	if ctx != nil {
+		e.ctx = ctx
+	}
 }
 
 func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue workflow.Queue, repository workflow.WorkflowRepository, taskFactory factory.TaskFactory, executor engine.Executor, retryTime time.Duration) *LocalScheduler {
@@ -50,6 +75,7 @@ func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue
 		retryTime:   retryTime,
 		running:     make(map[string]bool),
 		completed:   make(map[string]bool),
+		ctx:         context.Background(),
 	}
 
 	// Require this in your NewLocalScheduler function or any initializer
@@ -66,7 +92,7 @@ func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue
 }
 
 func (e *LocalScheduler) DelegateExecution(t workflow.WorkflowInstance) error {
-	return e.executor.Execute(t.ToExecutable())
+	return e.executor.Execute(e.ctx, t.ToExecutable())
 }
 
 func (e *LocalScheduler) Trigger(id workflow.WorkflowInstanceId) error {
@@ -232,18 +258,29 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			return
 		}
 
+		if err := e.ctx.Err(); err != nil {
+			e.release(instanceId)
+			logger.Log.Info(fmt.Sprintf("Not starting %s: run cancelled (%v)", instanceId, err), "component", "local scheduler")
+			return
+		}
 		t.SetStatus(workflow.Started)
 		t.StartDate = time.Now()
 		e.repository.Upsert(t.WorkflowExecution)
 		logger.Log.Info(fmt.Sprintf("Started task %s", instanceId), "component", "local scheduler")
+		if e.events != nil {
+			e.events.TaskStarted(t.WorkflowName(), t.Partition)
+		}
 
-		err := e.executor.Execute(t)
+		err := e.executor.Execute(e.ctx, t)
 		t.EndDate = time.Now()
 		if err != nil {
 			t.SetStatus(workflow.Failed)
 			t.SetError(err)
 			e.repository.Upsert(t.WorkflowExecution)
 			e.release(instanceId)
+			if e.events != nil {
+				e.events.TaskFailed(t.WorkflowName(), t.Partition, err, t.Retries() < t.MaxRetries() && e.ctx.Err() == nil)
+			}
 			e.Accept(fmt.Errorf("Task failed %s: %v", instanceId, err))
 			e.retry(t.WorkflowInstanceId)
 		} else {
@@ -251,6 +288,9 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			e.repository.Upsert(t.WorkflowExecution)
 			e.complete(instanceId)
 			logger.Log.Info(fmt.Sprintf("Completed %s", instanceId), "component", "local scheduler")
+			if e.events != nil {
+				e.events.TaskDone(t.WorkflowName(), t.Partition)
+			}
 			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 		}
 	}(taskId)
