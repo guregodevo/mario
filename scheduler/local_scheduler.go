@@ -366,10 +366,10 @@ func (e *LocalScheduler) retryLoop() {
 
 func (e *LocalScheduler) WaitForCompletion() error {
 	for atomic.LoadInt32(&e.counter) > 0 {
-		logger.Log.Info(fmt.Sprintf("%d tasks running ", e.counter), "component", "local scheduler")
+		logger.Log.Info(fmt.Sprintf("%d tasks running ", atomic.LoadInt32(&e.counter)), "component", "local scheduler")
 		time.Sleep(100 * time.Millisecond)
 	}
-	logger.Log.Info(fmt.Sprintf("%d tasks running ", e.counter), "component", "local scheduler")
+	logger.Log.Info(fmt.Sprintf("%d tasks running ", atomic.LoadInt32(&e.counter)), "component", "local scheduler")
 
 	e.wg.Wait()
 
