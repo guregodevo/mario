@@ -34,6 +34,7 @@ type LocalScheduler struct {
 	createMu    sync.Mutex
 	runningMu   sync.Mutex
 	running     map[string]bool
+	completed   map[string]bool
 }
 
 func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue workflow.Queue, repository workflow.WorkflowRepository, taskFactory factory.TaskFactory, executor engine.Executor, retryTime time.Duration) *LocalScheduler {
@@ -48,6 +49,7 @@ func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue
 		executor:    executor,
 		retryTime:   retryTime,
 		running:     make(map[string]bool),
+		completed:   make(map[string]bool),
 	}
 
 	// Require this in your NewLocalScheduler function or any initializer
@@ -111,11 +113,11 @@ func (e *LocalScheduler) fetchOrCreate(name, partition string) workflow.Executab
 	return t
 }
 
-// claim marks the instance as running in this scheduler. It returns false if it is already running.
+// claim marks the instance as running in this scheduler. It returns false if it is already running or has already completed in this scheduler.
 func (e *LocalScheduler) claim(instanceId string) bool {
 	e.runningMu.Lock()
 	defer e.runningMu.Unlock()
-	if e.running[instanceId] {
+	if e.running[instanceId] || e.completed[instanceId] {
 		return false
 	}
 	e.running[instanceId] = true
@@ -128,10 +130,24 @@ func (e *LocalScheduler) release(instanceId string) {
 	e.runningMu.Unlock()
 }
 
+// complete releases the instance and records that it ran successfully in this scheduler, so that a backfill runs it only once.
+func (e *LocalScheduler) complete(instanceId string) {
+	e.runningMu.Lock()
+	delete(e.running, instanceId)
+	e.completed[instanceId] = true
+	e.runningMu.Unlock()
+}
+
 func (e *LocalScheduler) isRunning(instanceId string) bool {
 	e.runningMu.Lock()
 	defer e.runningMu.Unlock()
 	return e.running[instanceId]
+}
+
+func (e *LocalScheduler) isCompleted(instanceId string) bool {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	return e.completed[instanceId]
 }
 
 func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
@@ -152,6 +168,11 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 
 		if !e.backfill && t.GetStatus() == workflow.Done {
 			logger.Log.Info("local scheduler", "Skipping task %s. Already done\n", t.InstanceId())
+			return
+		}
+
+		if e.isCompleted(t.InstanceId()) {
+			logger.Log.Info("local scheduler", "Skipping task %s. Already completed in this run\n", t.InstanceId())
 			return
 		}
 
@@ -200,7 +221,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 
 		instanceId := t.InstanceId()
 		if !e.claim(instanceId) {
-			logger.Log.Info("local scheduler", "Skipped task %s. Already running \n", instanceId)
+			logger.Log.Info("local scheduler", "Skipped task %s. Already running or completed \n", instanceId)
 			return
 		}
 		// The status may have changed since the first fetch.
@@ -228,7 +249,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		} else {
 			t.SetStatus(workflow.Done)
 			e.repository.Upsert(t.WorkflowExecution)
-			e.release(instanceId)
+			e.complete(instanceId)
 			logger.Log.Info("local scheduler", "Completed %s\n", instanceId)
 			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 		}
@@ -251,6 +272,9 @@ func (e *LocalScheduler) notifyDownstreams(taskName, partition, version string) 
 }
 
 func (e *LocalScheduler) triggerIfRequired(task workflow.WorkflowExecution) {
+	if e.isCompleted(task.InstanceId()) {
+		return
+	}
 	if (e.backfill || task.Status != workflow.Done) && e.allDependenciesCompleted(task.WorkflowName(), task.Partition, task.Version()) {
 		e.Trigger(task.WorkflowInstanceId)
 	}
@@ -303,7 +327,7 @@ func (e *LocalScheduler) retryLoop() {
 func (e *LocalScheduler) WaitForCompletion() error {
 	for atomic.LoadInt32(&e.counter) > 0 {
 		logger.Log.Info("local scheduler", "%d tasks running ", e.counter)
-		time.Sleep(3 * time.Second) // Sleep for 100 milliseconds
+		time.Sleep(100 * time.Millisecond)
 	}
 	logger.Log.Info("local scheduler", "%d tasks running ", e.counter)
 
