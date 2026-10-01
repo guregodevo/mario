@@ -24,6 +24,8 @@ type recorder struct {
 func (r *recorder) add(s string)                       { r.mu.Lock(); r.seq = append(r.seq, s); r.mu.Unlock() }
 func (r *recorder) TaskStarted(name, partition string) { r.add("started " + name) }
 func (r *recorder) TaskDone(name, partition string)    { r.add("done " + name) }
+func (r *recorder) TaskSkipped(name, partition string) { r.add("skipped " + name) }
+
 func (r *recorder) TaskFailed(name, partition string, err error, willRetry bool) {
 	r.add(fmt.Sprintf("failed %s retry=%v", name, willRetry))
 }
@@ -88,5 +90,50 @@ func TestACancelledRunStartsNothing(t *testing.T) {
 	}
 	if n := exec.n.Load(); n != 0 {
 		t.Fatalf("a cancelled run started %d task(s)", n)
+	}
+}
+
+// presentFactory is a dummy factory whose endpoints can already exist.
+type presentFactory struct {
+	static.DummyTaskFactory
+	present map[string]bool
+}
+
+func (f *presentFactory) NewDataEndpoint(name string) workflow.DataEndpoint {
+	return &static.DummyDataEndpoint{EndpointName: name, Complete: f.present[name]}
+}
+
+func (f *presentFactory) ExecutableOf(instance workflow.WorkflowExecution) *workflow.ExecutableWorkflowInstance {
+	return static.DummyBuilder(0, 0).SetExecution(instance).SetConcrete(f.NewDataEndpoint(instance.WorkflowName()), f.Fn(instance.WorkflowName())).Instance().ToExecutable()
+}
+
+func (f *presentFactory) NewExecutable(name string) *workflow.ExecutableWorkflowInstance {
+	return static.DummyBuilder(0, 0).SetWorkflow(name, 0, false, f.Version, f.Component).SetRuntime(f.Partition, workflow.Scheduled, 0).SetConcrete(f.NewDataEndpoint(name), f.Fn(name)).Instance().ToExecutable()
+}
+
+// A task whose output already exists is complete, as in Luigi: it is not
+// run, the host hears it was skipped, and what depends on it goes on.
+func TestATaskWhoseTargetExistsIsSkipped(t *testing.T) {
+	version := fmt.Sprintf("%d", time.Now().UnixNano())
+	partition := "2026-10-02"
+	factory := &presentFactory{DummyTaskFactory: static.DummyTaskFactory{Version: version, Partition: partition, Component: utils.COMPONENT},
+		present: map[string]bool{"A": true}}
+	repo := static.NewWorkflowRepository()
+	a := factory.NewExecutable("A")
+	b := factory.NewExecutable("B")
+	repo.Requires(b.WorkflowName(), a.WorkflowName(), version)
+
+	rec := &recorder{}
+	s := NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
+	s.SetEvents(rec)
+	if err := s.Trigger(a.WorkflowInstanceId); err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForCompletion()
+	rec.mu.Lock()
+	got := strings.Join(rec.seq, " | ")
+	rec.mu.Unlock()
+	if got != "skipped A | started B | done B" {
+		t.Fatalf("events = %q", got)
 	}
 }

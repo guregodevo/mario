@@ -49,6 +49,9 @@ type Events interface {
 	TaskStarted(name, partition string)
 	TaskDone(name, partition string)
 	TaskFailed(name, partition string, err error, willRetry bool)
+	// TaskSkipped: the task's target was already there, so it was marked
+	// done without running (a re-run resumes where the last one stopped).
+	TaskSkipped(name, partition string)
 }
 
 // SetEvents installs a listener; nil removes it.
@@ -221,6 +224,9 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 					logger.Log.Info(fmt.Sprintf("Skipping %s ...", missingdep), "component", "local scheduler")
 					dep.SetStatus(workflow.Done)
 					e.repository.Upsert(dep.WorkflowExecution)
+					if e.events != nil {
+						e.events.TaskSkipped(dep.WorkflowName(), dep.Partition)
+					}
 				} else {
 					logger.Log.Error(fmt.Sprintf("Missing %s ...", missingdep), "component", "local scheduler")
 					missingDeps = append(missingDeps, dep.WorkflowInstanceId)
@@ -255,6 +261,20 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		if !e.backfill && (t.GetStatus() == workflow.Started || t.GetStatus() == workflow.Done) {
 			e.release(instanceId)
 			logger.Log.Info(fmt.Sprintf("Skipped task %s. Already %v", instanceId, t.GetStatus()), "component", "local scheduler")
+			return
+		}
+
+		// A task whose output is already there is complete, as in Luigi: it
+		// is not run again, and what depends on it may go.
+		if t.GetStatus() != workflow.Done && t.Target().Exists() {
+			t.SetStatus(workflow.Done)
+			e.repository.Upsert(t.WorkflowExecution)
+			e.complete(instanceId)
+			logger.Log.Info(fmt.Sprintf("Skipping task %s. Its target exists", instanceId), "component", "local scheduler")
+			if e.events != nil {
+				e.events.TaskSkipped(t.WorkflowName(), t.Partition)
+			}
+			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 			return
 		}
 

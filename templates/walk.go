@@ -12,6 +12,16 @@ import (
 
 type FuncMap func(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tableName string) (map[string]interface{}, template.FuncMap, error)
 
+// ArgsOnly is the FuncMap a caller gets without one: the task's args, its
+// partition and its name are what a template can use, and no functions.
+func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tableName string) (map[string]interface{}, template.FuncMap, error) {
+	config := map[string]interface{}{"partition": partition, "project_id": projectID, "dataset_id": datasetID, "table_name": tableName}
+	for k, v := range taskDef.Args {
+		config[k] = v
+	}
+	return config, template.FuncMap{}, nil
+}
+
 func _outputPath(baseDir, projectID, datasetID, tableName string) string {
 	fileName := fmt.Sprintf("%s_%s.yaml", tableName, "YYYYMMDD")
 
@@ -57,8 +67,7 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 
 	// Walk through the directory to find YAML task definitions
 	err := ioFileIO.Walk(taskPath, func(path string) error {
-		print(taskPath)
-		if filepath.Ext(path) == ".yaml" {
+		if filepath.Ext(path) == ".yaml" || filepath.Ext(path) == ".yml" {
 			// Handle YAML files for task definitions
 			if filepath.Base(path) == "config.yaml" {
 				return nil
@@ -88,16 +97,31 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 		tmpl := template.New("main")
 
 		projectID, datasetID, tableName, errF := ioFileIO.ExtractInfo(taskPath)
-		taskDef.Name = fmt.Sprintf("%s.%s.%s", projectID, datasetID, tableName)
 		if errF != nil {
 			return fmt.Errorf("Unexpected task path format %s (expected projectID.datasetID.Name) : %v", taskPath, errF), nil
+		}
+		taskDef.Name = fmt.Sprintf("%s.%s.%s", projectID, datasetID, tableName)
+		for i, dep := range taskDef.Requires {
+			taskDef.Requires[i] = dep.WithDefaults(projectID, datasetID)
+		}
+		if fn == nil {
+			fn = ArgsOnly
 		}
 		config, funcs, errFunc := fn(taskDef, partition, projectID, datasetID, tableName)
 		if errFunc != nil {
 			return fmt.Errorf("task %s: %w", taskDef.Name, errFunc), nil
 		}
 
-		// Process the templatePath files (treat them as templates)
+		// Process the templatePath files (treat them as templates). No
+		// template directory means the field renders from its own text.
+		if templatePath == "" {
+			renderer, err := RenderLazy(tmpl, config, funcs, taskDef, fieldName)
+			if err != nil {
+				return fmt.Errorf("Error preparing lazy template for file %s: %v", taskPath, err), nil
+			}
+			taskDef.LazyRenderedField = renderer
+			continue
+		}
 		err = ioFileIO.Walk(templatePath, func(path string) error {
 			relPath, _ := filepath.Rel(templatePath, path)
 			name := filepath.ToSlash(relPath)

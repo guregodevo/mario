@@ -43,9 +43,22 @@ type YamlTaskDefinition struct {
 	AllowLargeResults  string            `yaml:"allow_large_results,omitempty"`
 	Timeout            string            `yaml:"timeout,omitempty"`
 	MaxRetries         int32             `yaml:"max_retries,omitempty"`
+	// Agent names who runs the task when the type is run by an agent (a
+	// coding agent, a reviewer): the factory for that type reads it.
+	Agent string `yaml:"agent,omitempty"`
+	// Target says what proves the task done, when the factory cannot tell
+	// from the name alone: a file that must exist, or a command that must
+	// exit 0. A task is done when its target exists, never when its run says so.
+	Target *YamlTarget `yaml:"target,omitempty"`
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
+}
+
+// YamlTarget is a task's proof: one of the two.
+type YamlTarget struct {
+	File    string `yaml:"file,omitempty"`
+	Command string `yaml:"command,omitempty"`
 }
 
 type Requires struct {
@@ -69,6 +82,18 @@ func NewRequires(ProjectID, DatasetId, TablePattern string) Requires {
 }
 func (dep Requires) Name() string {
 	return fmt.Sprintf("%s.%s.%s", dep.ProjectID, dep.DatasetID, dep.TablePattern)
+}
+
+// WithDefaults fills a requirement's project and dataset from the task that
+// declares it, as the schema promises ("default value is the … of the task").
+func (dep Requires) WithDefaults(projectID, datasetID string) Requires {
+	if dep.ProjectID == "" {
+		dep.ProjectID = projectID
+	}
+	if dep.DatasetID == "" {
+		dep.DatasetID = datasetID
+	}
+	return dep
 }
 
 // convertInterface converts map[interface{}]interface{} to map[string]interface{}
@@ -170,9 +195,6 @@ func (v *YAMLValidator) ValidateYAML(yamlContent []byte) (error, string) {
 	if err := yaml.Unmarshal(yamlContent, &task); err != nil {
 		return fmt.Errorf("error unmarshalling YAML into YamlTaskDefinition: %v", err), ""
 	}
-
-	// Debug statement to check the value of the Query field
-	fmt.Printf("Unmarshalled task definition: %+v\n", task)
 
 	// Step 7: Validate the JSON data against the schema specified by task.Type
 	if err := v.validateSchema(task.Type, documentLoader); err != nil {
