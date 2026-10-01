@@ -10,11 +10,6 @@ GO_OUT_DIR := pb
 # Default target
 all: clean tests run
 
-# Generate mocks for the docker client
-mocks: mocks
-	@mockgen -package=workflow -source=workflow/workflow.go -destination=workflow/mocks.go
-	@mockgen -package=engine -source=engine/docker.go -destination=engine/mocks.go
-
 build:
 	go build
 
