@@ -31,6 +31,9 @@ type LocalScheduler struct {
 	wg          sync.WaitGroup
 	executor    engine.Executor
 	retryTime   time.Duration
+	createMu    sync.Mutex
+	runningMu   sync.Mutex
+	running     map[string]bool
 }
 
 func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue workflow.Queue, repository workflow.WorkflowRepository, taskFactory factory.TaskFactory, executor engine.Executor, retryTime time.Duration) *LocalScheduler {
@@ -44,6 +47,7 @@ func NewLocalScheduler(backfill, loop bool, taskQueue workflow.Queue, retryQueue
 		shutdownCh:  make(chan struct{}),
 		executor:    executor,
 		retryTime:   retryTime,
+		running:     make(map[string]bool),
 	}
 
 	// Require this in your NewLocalScheduler function or any initializer
@@ -91,6 +95,9 @@ func (e *LocalScheduler) loop() {
 
 func (e *LocalScheduler) fetchOrCreate(name, partition string) workflow.ExecutableWorkflowInstance {
 	id := workflow.InstanceIdOf(name, partition)
+	// Fetch and create must be atomic, otherwise concurrent callers create duplicate executions of the same instance.
+	e.createMu.Lock()
+	defer e.createMu.Unlock()
 	exe, ok := e.repository.Fetch(id)
 	var t workflow.ExecutableWorkflowInstance
 	if !ok {
@@ -102,6 +109,29 @@ func (e *LocalScheduler) fetchOrCreate(name, partition string) workflow.Executab
 		t = e.taskFactory.ExecutableOf(exe)
 	}
 	return t
+}
+
+// claim marks the instance as running in this scheduler. It returns false if it is already running.
+func (e *LocalScheduler) claim(instanceId string) bool {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	if e.running[instanceId] {
+		return false
+	}
+	e.running[instanceId] = true
+	return true
+}
+
+func (e *LocalScheduler) release(instanceId string) {
+	e.runningMu.Lock()
+	delete(e.running, instanceId)
+	e.runningMu.Unlock()
+}
+
+func (e *LocalScheduler) isRunning(instanceId string) bool {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	return e.running[instanceId]
 }
 
 func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
@@ -125,7 +155,8 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			return
 		}
 
-		if !e.backfill && t.GetStatus() == workflow.Started {
+		// When backfilling, a task left Started by a previous run is restarted, unless it is running in this scheduler.
+		if (!e.backfill && t.GetStatus() == workflow.Started) || e.isRunning(t.InstanceId()) {
 			logger.Log.Info("local scheduler", "Skipping task %s. Already started\n", t.InstanceId())
 			return
 		}
@@ -157,36 +188,49 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			//e.repository.Upsert(t)
 			if e.backfill {
 				for i := range missingDeps {
-					e.Trigger(missingDeps[i])
+					// A dependency already running here notifies its downstreams when it completes.
+					if !e.isRunning(missingDeps[i].InstanceId()) {
+						e.Trigger(missingDeps[i])
+					}
 				}
 			}
 			logger.Log.Error("local scheduler", "Missing %s version %s component %s deps: %v ...\n", t.InstanceId(), t.Version(), t.Component(), missingDeps)
-			e.repository.Upsert(t.WorkflowExecution)
 			return
 		}
-		t = e.fetchOrCreate(t.WorkflowName(), t.Partition)
-		if t.GetStatus() != workflow.Started {
-			t.SetStatus(workflow.Started)
-			t.StartDate = time.Now()
-			e.repository.Upsert(t.WorkflowExecution)
-			logger.Log.Info("local scheduler", "Started task %s\n", t.InstanceId())
 
-			if err := e.executor.Execute(t); err != nil {
-				t.EndDate = time.Now()
-				t.SetStatus(workflow.Failed)
-				t.SetError(err)
-				e.repository.Upsert(t.WorkflowExecution)
-				e.Accept(fmt.Errorf("Task failed %s: %v", t.InstanceId(), err))
-				e.retry(t.WorkflowInstanceId)
-			} else {
-				t.EndDate = time.Now()
-				t.SetStatus(workflow.Done)
-				e.repository.Upsert(t.WorkflowExecution)
-				logger.Log.Info("local scheduler", "Completed %s\n", t.InstanceId())
-				e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
-			}
+		instanceId := t.InstanceId()
+		if !e.claim(instanceId) {
+			logger.Log.Info("local scheduler", "Skipped task %s. Already running \n", instanceId)
+			return
+		}
+		// The status may have changed since the first fetch.
+		t = e.fetchOrCreate(t.WorkflowName(), t.Partition)
+		if !e.backfill && (t.GetStatus() == workflow.Started || t.GetStatus() == workflow.Done) {
+			e.release(instanceId)
+			logger.Log.Info("local scheduler", "Skipped task %s. Already %v \n", instanceId, t.GetStatus())
+			return
+		}
+
+		t.SetStatus(workflow.Started)
+		t.StartDate = time.Now()
+		e.repository.Upsert(t.WorkflowExecution)
+		logger.Log.Info("local scheduler", "Started task %s\n", instanceId)
+
+		err := e.executor.Execute(t)
+		t.EndDate = time.Now()
+		if err != nil {
+			t.SetStatus(workflow.Failed)
+			t.SetError(err)
+			e.repository.Upsert(t.WorkflowExecution)
+			e.release(instanceId)
+			e.Accept(fmt.Errorf("Task failed %s: %v", instanceId, err))
+			e.retry(t.WorkflowInstanceId)
 		} else {
-			logger.Log.Info("local scheduler", "Skipped task %s. Already Started \n", t.InstanceId())
+			t.SetStatus(workflow.Done)
+			e.repository.Upsert(t.WorkflowExecution)
+			e.release(instanceId)
+			logger.Log.Info("local scheduler", "Completed %s\n", instanceId)
+			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 		}
 	}(taskId)
 }

@@ -3,7 +3,6 @@ package static
 import (
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/guregodevo/mario/workflow"
 )
@@ -34,12 +33,12 @@ func (t *StaticWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution,
 	defer t.mutex.RUnlock()
 	instances, oks := t.InstanceExecutions[id]
 	if oks && len(instances) > 0 {
-		maxDate := time.Now().AddDate(1, 0, 0)
 		var latestExe workflow.WorkflowExecution
-		for _, exe := range t.InstanceExecutions[id] {
-			if maxDate.After(exe.StartDate) {
+		first := true
+		for _, exe := range instances {
+			if first || exe.StartDate.After(latestExe.StartDate) {
 				latestExe = exe
-				maxDate = exe.StartDate
+				first = false
 			}
 		}
 		return latestExe, true
