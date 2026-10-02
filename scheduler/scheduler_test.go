@@ -8,6 +8,7 @@ import (
 	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/utils"
 	"github.com/guregodevo/mario/workflow"
+	"os"
 	"testing"
 	"time"
 )
@@ -107,6 +108,7 @@ func TestRandomDAGSqlite(t *testing.T) {
 	factory := &static.DummyTaskFactory{Version: version, Partition: partition, Component: utils.COMPONENT}
 
 	for i := 0; i < 2; i++ {
+		removeDB("test_randomdag")
 		repo := sqlite.NewWorkflowRepository("test_randomdag", static.BuilderDummyFn)
 
 		executor := NewLocalScheduler(true, true, static.NewChannelQueue(10), static.NewChannelQueue(10), repo, factory, engine.NewLocalExecutor(), 1*time.Millisecond)
@@ -123,6 +125,7 @@ func TestRandomDAGSqlite(t *testing.T) {
 		validate(t, repo, tasks, false, version)
 		time.Sleep(100 * time.Millisecond)
 		repo.Close()
+		removeDB("test_randomdag")
 		time.Sleep(100 * time.Millisecond)
 
 	}
@@ -150,6 +153,8 @@ func TestRandomDAGStatic(t *testing.T) {
 }
 
 func TestDeterministicDAGTriadSqlite(t *testing.T) {
+	removeDB("test_dag_triad")
+	defer removeDB("test_dag_triad")
 	repo := sqlite.NewWorkflowRepository("test_dag_triad", static.BuilderDummyFn)
 	defer repo.Close()
 	taskQueue := static.NewChannelQueue(10)
@@ -236,6 +241,8 @@ func TestDeterministicDAGStatic(t *testing.T) {
 }
 
 func TestDeterministicDAGSqlite(t *testing.T) {
+	removeDB("test_dag")
+	defer removeDB("test_dag")
 	repo := sqlite.NewWorkflowRepository("test_dag", static.BuilderDummyFn)
 	defer repo.Close()
 	taskQueue := static.NewChannelQueue(10)
@@ -271,4 +278,12 @@ func _TestDeterministicDAG(t *testing.T, taskQueue workflow.Queue, retryQueue wo
 	executor.WaitForCompletion()
 	tasks := []workflow.WorkflowExecution{taskA.WorkflowExecution, taskB.WorkflowExecution, taskC.WorkflowExecution, taskD.WorkflowExecution}
 	validate(t, repo, tasks, true, version)
+}
+// removeDB clears what a sqlite-backed test wrote. A persistence repository
+// no longer deletes its file on Close (that is what choosing it is for), so
+// the test owns its own litter: before it opens, and when it lets go.
+func removeDB(name string) {
+	for _, f := range []string{"./" + name + ".db", "./" + name + ".db-shm", "./" + name + ".db-wal"} {
+		os.Remove(f)
+	}
 }

@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/workflow"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type SqliteWorkflowRepository struct {
@@ -23,20 +22,20 @@ type SqliteWorkflowRepository struct {
 
 func (t *SqliteWorkflowRepository) Close() {
 	t.db.Close()
-	os.Remove(t.dbFile)
-	os.Remove(t.dbFile + "-shm")
-	os.Remove(t.dbFile + "-wal")
 }
 
 func NewWorkflowRepository(dataSourceName string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
 	db_file := get_db_file(dataSourceName)
-	db, err := sql.Open("sqlite3", db_file)
+	db, err := sql.Open("sqlite", db_file)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Create the table if it doesn't exist
-	_, err = db.Exec(`DROP TABLE IF EXISTS workflow_dependencies; CREATE TABLE IF NOT EXISTS workflow_dependencies (
+	// Create the tables if they do not exist. Nothing is dropped: a
+	// repository that deletes what it holds on every open cannot answer
+	// "what did this run do" after a restart, which is the whole reason a
+	// host chooses it over the in-memory one.
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS workflow_dependencies (
 		workflow_id TEXT NOT NULL,
 		required_workflow_id TEXT NOT NULL,        
 		version  TEXT NOT NULL,
@@ -46,7 +45,7 @@ func NewWorkflowRepository(dataSourceName string, builderFunc workflow.GetBuilde
 		log.Fatal(err)
 	}
 
-	_, err = db.Exec(`DROP TABLE IF EXISTS workflow_executions; CREATE TABLE workflow_executions (
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS workflow_executions (
 		ExecutionId TEXT PRIMARY KEY,
 		Id TEXT NOT NULL,
 		Name TEXT NOT NULL,
