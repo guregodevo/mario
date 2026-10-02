@@ -116,7 +116,8 @@ func (r *SqliteWorkflowRepository) ExecutionsByName(name string, limit int) []wo
 	// Execute the query with the name and limit as parameters
 	rows, err := r.db.Query(query, name, limit)
 	if err != nil {
-		log.Fatal(err) // Consider better error handling
+		log.Printf("sqlite repository: %v", err)
+		return executions
 	}
 	defer rows.Close()
 
@@ -129,7 +130,7 @@ func (r *SqliteWorkflowRepository) ExecutionsByName(name string, limit int) []wo
 
 		// Scan each row into the execution structure
 		if err := rows.Scan(&execution.ExecutionId, &execution.DName, &execution.Partition, &execution.StartDate, &execution.EndDate, &statusString, &errorString, &parametersString, &execution.DRetries, &execution.DComponent, &execution.DVersion); err != nil {
-			log.Fatal(err) // Consider better error handling
+			log.Printf("sqlite repository: %v", err)
 		}
 
 		// Convert the scanned values to appropriate types
@@ -140,7 +141,7 @@ func (r *SqliteWorkflowRepository) ExecutionsByName(name string, limit int) []wo
 		}
 
 		if err := json.Unmarshal([]byte(parametersString), &execution.DParameters); err != nil {
-			log.Fatal(err) // Consider better error handling
+			log.Printf("sqlite repository: %v", err)
 		}
 
 		// Append the execution to the list
@@ -171,7 +172,7 @@ func (r *SqliteWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution,
 			// No matching workflow execution was found
 			return workflow.WorkflowExecution{}, false
 		}
-		log.Fatal(err) // Or handle the error as appropriate for your application
+		log.Printf("sqlite repository: %v", err)
 	}
 
 	// Convert status string to Status type
@@ -183,7 +184,7 @@ func (r *SqliteWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution,
 
 	// Convert parameters string to map (assuming it's stored as JSON)
 	if err := json.Unmarshal([]byte(parametersString), &execution.DParameters); err != nil {
-		log.Fatal(err)
+		log.Printf("sqlite repository: %v", err)
 	}
 
 	return execution, true
@@ -196,7 +197,7 @@ func (r *SqliteWorkflowRepository) RevertRequires(e, required string, version st
 	_, err := r.db.Exec("DELETE FROM workflow_dependencies WHERE workflow_id = ? AND required_workflow_id = ? AND version = ?",
 		e, required, version)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("sqlite repository: %v", err)
 	}
 }
 
@@ -207,7 +208,7 @@ func (r *SqliteWorkflowRepository) Requires(e string, required string, version s
 	_, err := r.db.Exec("INSERT OR IGNORE INTO workflow_dependencies (workflow_id, required_workflow_id, version) VALUES (?, ?, ?)",
 		e, required, version)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("sqlite repository: %v", err)
 	}
 }
 
@@ -216,7 +217,8 @@ func (r *SqliteWorkflowRepository) fetchIdsByQuery(query string, instanceID stri
 
 	rows, err := r.db.Query(query, instanceID, version)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("sqlite repository: %v", err)
+		return workflows
 	}
 	defer rows.Close()
 
@@ -224,7 +226,8 @@ func (r *SqliteWorkflowRepository) fetchIdsByQuery(query string, instanceID stri
 		var workflowID string
 
 		if err := rows.Scan(&workflowID); err != nil {
-			log.Fatal(err)
+			log.Printf("sqlite repository: %v", err)
+			return workflows
 		}
 		workflows[workflowID] = true
 	}
@@ -236,14 +239,15 @@ func (r *SqliteWorkflowRepository) fetchWorkflowsByQuery(query string, instanceI
 
 	rows, err := r.db.Query(query, instanceID, version)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("sqlite repository: %v", err)
+		return workflows
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var workflowID string
 		if err := rows.Scan(&workflowID); err != nil {
-			log.Fatal(err)
+			log.Printf("sqlite repository: %v", err)
 		}
 		if inst, ok := r.Fetch(workflowID); ok {
 			workflows[inst.InstanceId()] = inst
@@ -338,7 +342,8 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 
 	rows, err := r.db.Query(query, id)
 	if err != nil {
-		log.Fatal(err) // Consider handling this error more gracefully
+		log.Printf("sqlite repository: %v", err)
+		return executions
 	}
 	defer rows.Close()
 
@@ -348,7 +353,7 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 		var parametersString string
 
 		if err := rows.Scan(&execution.ExecutionId, &execution.DName, &execution.Partition, &execution.StartDate, &execution.EndDate, &statusString, &execution.Error, &parametersString, &execution.DRetries, &execution.DComponent, &execution.DVersion); err != nil {
-			log.Fatal(err) // Consider handling this error more gracefully
+			log.Printf("sqlite repository: %v", err)
 		}
 
 		// Convert status string to Status type
@@ -356,7 +361,7 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 
 		// Convert parameters string to map (assuming it's stored as JSON)
 		if err := json.Unmarshal([]byte(parametersString), &execution.DParameters); err != nil {
-			log.Fatal(err) // Consider handling this error more gracefully
+			log.Printf("sqlite repository: %v", err)
 		}
 
 		executions[execution.ExecutionId] = execution
