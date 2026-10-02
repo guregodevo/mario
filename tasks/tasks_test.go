@@ -155,3 +155,16 @@ func TestTheValidatorIsBuiltFromTheRegisteredTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A DAG walked once is run on any day: the prompt renders over the run's
+// partition, not the one the walk happened to have.
+func TestPromptRendersOverTheBoundPartition(t *testing.T) {
+	d := &templates.YamlTaskDefinition{Prompt: "on {{.partition}}", Args: map[string]string{}}
+	d.Name = "p.d.t"
+	d.Partition = ""
+	d.LazyRenderedField = func() (string, error) { return "on ", nil }
+	b := Base{}.Bind(nil, "", Outputs{}, "2026-10-02", "v")
+	if got, _ := b.Prompt(d); got != "on 2026-10-02" {
+		t.Fatalf("prompt = %q", got)
+	}
+}

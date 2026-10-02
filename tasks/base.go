@@ -127,7 +127,9 @@ func (b *Base) builder() workflow.WorflowBuilder {
 // Prompt is the definition's prompt, rendered — by the walk's template when
 // it set one, else over args and partition here.
 func (b *Base) Prompt(d *templates.YamlTaskDefinition) (string, error) {
-	if d.LazyRenderedField != nil {
+	// The walk's renderer baked in the partition it was given; a run bound
+	// to another day renders again, over its own.
+	if d.LazyRenderedField != nil && d.Partition == b.Partition {
 		return d.LazyRenderedField()
 	}
 	return b.Render(d, d.Prompt)
