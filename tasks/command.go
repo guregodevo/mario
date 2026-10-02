@@ -77,7 +77,7 @@ const commonDefinitions = `{
       "items": {
         "type": "object",
         "properties": {
-          "table_pattern": {"type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "The task required, by name."},
+          "table_pattern": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "The task required, by name."},
           "project_id": {"type": "string", "description": "Another workflow (default: this one)."},
           "dataset_id": {"type": "string", "description": "Another group (default: this task's)."},
           "external": {"type": "boolean", "description": "Made outside this workflow: never run, only checked."}
