@@ -168,3 +168,20 @@ func TestPromptRendersOverTheBoundPartition(t *testing.T) {
 		t.Fatalf("prompt = %q", got)
 	}
 }
+
+// An external that another DAG defines is checked by that definition's
+// target, not by the output convention.
+func TestAnExternalKnownElsewhereIsCheckedByItsTarget(t *testing.T) {
+	root := t.TempDir()
+	other := &templates.YamlTaskDefinition{Target: &templates.YamlTarget{File: "CHANGELOG.md"}}
+	other.Name = "release.steps.changelog"
+	b := Command().Bind(map[string]*templates.YamlTaskDefinition{}, root, Outputs{Dir: filepath.Join(root, "out")}, "2026-10-02", "v")
+	b.Externals = map[string]*templates.YamlTaskDefinition{other.Name: other}
+	if b.NewDataEndpoint(other.Name).Exists() {
+		t.Fatal("no file, no proof")
+	}
+	os.WriteFile(filepath.Join(root, "CHANGELOG.md"), []byte("x"), 0o644)
+	if !b.NewDataEndpoint(other.Name).Exists() {
+		t.Fatal("the sibling's file is the proof")
+	}
+}

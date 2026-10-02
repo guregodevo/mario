@@ -32,7 +32,11 @@ type Base struct {
 	Run       Run
 
 	Defs      map[string]*templates.YamlTaskDefinition // by mario name
-	Dir       string                                   // where targets are checked and commands run
+	// Externals are definitions of tasks this run does not own — they live
+	// in another DAG and are only checked here, by THEIR target (mario's
+	// cross-DAG dependency through a data endpoint). Optional.
+	Externals map[string]*templates.YamlTaskDefinition
+	Dir       string // where targets are checked and commands run
 	Outputs   Outputs                                  // where outputs are kept when no target is named
 	Partition string
 	Version   string
@@ -111,7 +115,11 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 // NewDataEndpoint is the task's proof: the target its definition names, or
 // its output by convention — also for an external, whose maker writes there.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
-	if d, defined := b.Defs[name]; defined && HasTarget(d) {
+	d, known := b.Defs[name]
+	if !known {
+		d, known = b.Externals[name]
+	}
+	if known && HasTarget(d) {
 		if d.Target.File != "" {
 			return FileEndpoint(name, b.Dir, d.Target.File)
 		}
