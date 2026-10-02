@@ -19,7 +19,12 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 	for k, v := range taskDef.Args {
 		config[k] = v
 	}
-	return config, template.FuncMap{}, nil
+	// `output` is known at run time only (a task type binds it to the run's
+	// outputs); it is declared here so a walk can parse the field.
+	funcs := template.FuncMap{"output": func(name string) (string, error) {
+		return "", fmt.Errorf("output %q is only known when the task runs", name)
+	}}
+	return config, funcs, nil
 }
 
 func _outputPath(baseDir, projectID, datasetID, tableName string) string {
@@ -122,6 +127,7 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 			taskDef.LazyRenderedField = renderer
 			continue
 		}
+		taskDef.Templated = true
 		err = ioFileIO.Walk(templatePath, func(path string) error {
 			relPath, _ := filepath.Rel(templatePath, path)
 			name := filepath.ToSlash(relPath)

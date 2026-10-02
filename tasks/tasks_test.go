@@ -185,3 +185,26 @@ func TestAnExternalKnownElsewhereIsCheckedByItsTarget(t *testing.T) {
 		t.Fatal("the sibling's file is the proof")
 	}
 }
+
+// A prompt reads what the task before it produced: {{ output "log" }} is the
+// kept output of that task, for this run's partition.
+func TestAPromptReadsAnUpstreamOutput(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"log":     "type: command\ncommand: printf 'c1\\nc2\\n'\n",
+		"summary": "type: llm\nprompt: \"summarize: {{ output \\\"log\\\" }}\"\nrequires:\n  - table_pattern: log\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.HasSuffix(seq, "done summary") {
+		t.Fatalf("events = %q", seq)
+	}
+	if len(model.calls) != 1 || model.calls[0] != ": summarize: c1\nc2\n" {
+		t.Fatalf("the prompt carried the upstream output: %q", model.calls)
+	}
+}

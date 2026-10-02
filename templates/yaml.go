@@ -56,6 +56,10 @@ type YamlTaskDefinition struct {
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
+	// Templated says a template directory shaped the rendered field: the
+	// lazy renderer is the one to use. Without one, a task type renders the
+	// field itself, with what it knows at run time (tasks.Base).
+	Templated bool `yaml:"-"`
 }
 
 // YamlTarget is a task's proof: one of the two.

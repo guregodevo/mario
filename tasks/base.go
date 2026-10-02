@@ -135,9 +135,10 @@ func (b *Base) builder() workflow.WorflowBuilder {
 // Prompt is the definition's prompt, rendered — by the walk's template when
 // it set one, else over args and partition here.
 func (b *Base) Prompt(d *templates.YamlTaskDefinition) (string, error) {
-	// The walk's renderer baked in the partition it was given; a run bound
-	// to another day renders again, over its own.
-	if d.LazyRenderedField != nil && d.Partition == b.Partition {
+	// A template directory's renderer is the one to use when there was
+	// one, for the partition it was walked with; otherwise the type renders
+	// the prompt itself, with the run's partition and outputs.
+	if d.Templated && d.LazyRenderedField != nil && d.Partition == b.Partition {
 		return d.LazyRenderedField()
 	}
 	return b.Render(d, d.Prompt)
@@ -153,6 +154,19 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 	vars, funcs, err := templates.ArgsOnly(d, b.Partition, seg[0], seg[1], seg[2])
 	if err != nil {
 		return "", err
+	}
+	// `output "log"` puts the kept output of a task of this run in the text
+	// — a short name is a task of the same group, a dotted one is any.
+	funcs["output"] = func(name string) (string, error) {
+		full := name
+		if !strings.Contains(name, ".") {
+			full = seg[0] + "." + seg[1] + "." + name
+		}
+		out, err := b.Outputs.Read(full, b.Partition)
+		if err != nil {
+			return "", fmt.Errorf("output of %s is not there (is it required by this task?): %w", full, err)
+		}
+		return out, nil
 	}
 	t, err := template.New(d.Name).Funcs(funcs).Parse(text)
 	if err != nil {
