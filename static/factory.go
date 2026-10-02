@@ -49,8 +49,9 @@ func (f *StaticWorflowBuilder) SetRuntime(partition string, status workflow.Stat
 	f.Inst.SetStatus(status)
 	f.Inst.DRetries = retries
 	f.Inst.DParameters = make(map[string]string, 0)
-	f.Inst.StartDate = time.Now().UTC()
-	f.Inst.EndDate = time.Now().UTC()
+	// No dates: a scheduled execution has not started. The scheduler stamps
+	// StartDate when it starts the task and EndDate when it ends, so a Done
+	// record with no StartDate is one whose target was found, never run.
 	return f
 }
 

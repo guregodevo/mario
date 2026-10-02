@@ -136,4 +136,9 @@ func TestATaskWhoseTargetExistsIsSkipped(t *testing.T) {
 	if got != "skipped A | started B | done B" {
 		t.Fatalf("events = %q", got)
 	}
+	ra, _ := repo.Fetch(a.InstanceId())
+	rb, _ := repo.Fetch(b.InstanceId())
+	if !ra.StartDate.IsZero() || rb.StartDate.IsZero() || rb.EndDate.IsZero() {
+		t.Fatalf("a skipped task has no start date, a run one has both: A=%v B=%v/%v", ra.StartDate, rb.StartDate, rb.EndDate)
+	}
 }
