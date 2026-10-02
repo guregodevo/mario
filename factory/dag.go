@@ -29,6 +29,11 @@ func BuildDAG(version string, partition, component string, repository workflow.W
 		for _, dep := range t.Requires {
 			depTask, ok := tasks[dep.Name()]
 			if ok {
+				if dep.External {
+					// A defined task would be run; "external" says it must not be.
+					// Silently running it would open a gate nobody opened.
+					return nil, fmt.Errorf("task %s requires %s as external, but %s has a definition in this DAG: an external task is made outside it — delete the definition, or drop external", t.Name, dep.Name(), dep.Name())
+				}
 				exe := tasks[t.Name]
 				repository.Requires(exe.WorkflowName(), depTask.WorkflowName(), version)
 				continue
