@@ -31,13 +31,13 @@ type Base struct {
 	SchemaDoc []byte // the JSON schema for this type's files (factory.Schematic)
 	Run       Run
 
-	Defs      map[string]*templates.YamlTaskDefinition // by mario name
+	Defs map[string]*templates.YamlTaskDefinition // by mario name
 	// Externals are definitions of tasks this run does not own — they live
 	// in another DAG and are only checked here, by THEIR target (mario's
 	// cross-DAG dependency through a data endpoint). Optional.
 	Externals map[string]*templates.YamlTaskDefinition
-	Dir       string // where targets are checked and commands run
-	Outputs   Outputs                                  // where outputs are kept when no target is named
+	Dir       string  // where targets are checked and commands run
+	Outputs   Outputs // where outputs are kept when no target is named
 	Partition string
 	Version   string
 }
