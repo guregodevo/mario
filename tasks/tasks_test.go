@@ -223,3 +223,61 @@ func TestATargetRendersThePartition(t *testing.T) {
 		t.Fatal("the partition's file is the proof")
 	}
 }
+
+// Mixed routes each task to the factory of its type; a name with no
+// definition (an external) goes to the first registered type, whose output
+// convention is shared.
+func TestMixedRoutesByTypeAndExternalsToTheFirst(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"log":     "type: command\ncommand: echo hi\n",
+		"summary": "type: llm\nprompt: sum\nrequires:\n  - table_pattern: log\n  - table_pattern: gate\n    external: true\n",
+	})
+	bound := factory.NewComponent()
+	outputs := Outputs{Dir: filepath.Join(root, "out")}
+	for _, b := range types {
+		bound.Add(b.Bind(defs, root, outputs, "2026-10-02", "v"))
+	}
+	m := Mixed(bound, defs)
+	if err := m.Fn("wf.steps.log")(context.Background()); err != nil {
+		t.Fatalf("the command type ran log: %v", err)
+	}
+	if err := m.Fn("wf.steps.summary")(context.Background()); err != nil {
+		t.Fatalf("the llm type ran summary: %v", err)
+	}
+	if len(model.calls) != 1 {
+		t.Fatalf("model calls = %v", model.calls)
+	}
+	if m.NewDataEndpoint("wf.steps.gate").Exists() {
+		t.Fatal("an external's proof is the shared output convention: not there yet")
+	}
+	outputs.Write("wf.steps.gate", "2026-10-02", "yes")
+	if !m.NewDataEndpoint("wf.steps.gate").Exists() {
+		t.Fatal("… and there once written")
+	}
+	if err := m.Fn("wf.steps.gate")(context.Background()); err == nil {
+		t.Fatal("an external is never run")
+	}
+}
+
+func TestOutputsRoundTrip(t *testing.T) {
+	o := Outputs{Dir: t.TempDir()}
+	if o.Path("w.g.t", "p") != filepath.Join(o.Dir, "w", "g", "t", "p") {
+		t.Fatalf("path = %q", o.Path("w.g.t", "p"))
+	}
+	if err := o.Write("w.g.t", "p", "data"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := o.Read("w.g.t", "p"); got != "data" || !o.Endpoint("w.g.t", "p").Exists() {
+		t.Fatalf("read %q", got)
+	}
+	if o.Endpoint("w.g.other", "p").Exists() {
+		t.Fatal("another task's output is not there")
+	}
+}
