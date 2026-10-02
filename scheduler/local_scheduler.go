@@ -241,7 +241,11 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			dep := e.fetchOrCreate(depName, id.Partition)
 			if dep.Status != workflow.Done {
 				missingdep := fmt.Errorf(" %s Job Status %d", dep.Target().Name(), dep.GetStatus())
-				if dep.Target().Exists() {
+				// An EXTERNAL requirement is settled here by its target: nobody
+				// runs it. A requirement of this DAG is not — it is triggered, and
+				// settles itself after ITS requirements (its own Start skips it
+				// when its target is there), so the graph resolves root to sink.
+				if dep.IsExternal() && dep.Target().Exists() {
 					logger.Log.Info(fmt.Sprintf("Skipping %s ...", missingdep), "component", "local scheduler")
 					dep.SetStatus(workflow.Done)
 					e.repository.Upsert(dep.WorkflowExecution)
@@ -283,8 +287,11 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			return
 		}
 
-		// A task whose output is already there is complete, as in Luigi: it
-		// is not run again, and what depends on it may go.
+		// Its requirements are all done (above): now, a task whose output is
+		// already there is complete, as in Luigi — not run again, and what
+		// depends on it may go. Checked HERE, after the requirements, so a
+		// DAG resolves root to sink: a downstream never settles before what
+		// it requires has.
 		if t.GetStatus() != workflow.Done && t.Target().Exists() {
 			t.SetStatus(workflow.Done)
 			e.repository.Upsert(t.WorkflowExecution)

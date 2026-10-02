@@ -156,3 +156,31 @@ func TestATaskWhoseTargetExistsIsSkipped(t *testing.T) {
 		t.Fatalf("a skipped task has no start date, a run one has both: A=%v B=%v/%v", ra.StartDate, rb.StartDate, rb.EndDate)
 	}
 }
+
+// Every target already there, the sink triggered: the DAG still resolves
+// root to sink — a downstream is never settled before what it requires
+// (Greg, 2026-10-02: "upstream waiting and downstream already skipped …
+// a dag orchestrator would keep the downstream waiting").
+func TestASkippedDAGResolvesRootToSink(t *testing.T) {
+	version := fmt.Sprintf("%d", time.Now().UnixNano())
+	partition := "2026-10-02"
+	factory := &presentFactory{DummyTaskFactory: static.DummyTaskFactory{Version: version, Partition: partition, Component: utils.COMPONENT},
+		present: map[string]bool{"A": true, "B": true, "C": true}}
+	repo := static.NewWorkflowRepository()
+	a := factory.NewExecutable("A")
+	b := factory.NewExecutable("B")
+	c := factory.NewExecutable("C")
+	repo.Requires(b.WorkflowName(), a.WorkflowName(), version)
+	repo.Requires(c.WorkflowName(), b.WorkflowName(), version)
+
+	rec := newRecorder()
+	s := NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
+	s.SetEvents(rec.ch)
+	if err := s.Trigger(c.WorkflowInstanceId); err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForCompletion()
+	if got := rec.joined(); got != "skipped A | skipped B | skipped C" {
+		t.Fatalf("events = %q", got)
+	}
+}
