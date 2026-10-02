@@ -385,8 +385,15 @@ func (e *LocalScheduler) retryLoop() {
 }
 
 func (e *LocalScheduler) WaitForCompletion() error {
-	for atomic.LoadInt32(&e.counter) > 0 {
-		logger.Log.Info(fmt.Sprintf("%d tasks running ", atomic.LoadInt32(&e.counter)), "component", "local scheduler")
+	// Say the count when it changes, not ten times a second: a host that
+	// keeps the engine's log (Memdoor does) got 2,500 identical lines from
+	// one four-minute task.
+	last := int32(-1)
+	for n := atomic.LoadInt32(&e.counter); n > 0; n = atomic.LoadInt32(&e.counter) {
+		if n != last {
+			logger.Log.Info(fmt.Sprintf("%d tasks running ", n), "component", "local scheduler")
+			last = n
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	logger.Log.Info(fmt.Sprintf("%d tasks running ", atomic.LoadInt32(&e.counter)), "component", "local scheduler")
