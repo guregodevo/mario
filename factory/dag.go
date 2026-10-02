@@ -5,6 +5,7 @@ import (
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/templates"
 	"github.com/guregodevo/mario/workflow"
+	"strings"
 )
 
 // BuildDAG populates the repository's dependencies from the task definitions
@@ -55,7 +56,36 @@ func BuildDAG(version string, partition, component string, repository workflow.W
 			repository.Requires(exe.WorkflowName(), w.WorkflowName(), version)
 		}
 	}
+	// A cycle would never run and never fail: nothing is ready, the scheduler
+	// finds nothing to do and the run ends "done" with nothing done. Refuse
+	// it here, by name.
+	for name := range taskDefs {
+		if path := cycleFrom(repository, taskDefs[name].Name, version, nil, map[string]bool{}); path != nil {
+			return nil, fmt.Errorf("the DAG has a cycle: %s", strings.Join(path, " → "))
+		}
+	}
 	return tasks, nil
+}
+
+// cycleFrom walks the requirements of name and answers the cycle it finds
+// as the path that closes it, or nil.
+func cycleFrom(repository workflow.WorkflowRepository, name, version string, stack []string, done map[string]bool) []string {
+	for i, s := range stack {
+		if s == name {
+			return append(stack[i:], name)
+		}
+	}
+	if done[name] {
+		return nil
+	}
+	stack = append(stack, name)
+	for dep := range repository.Upstreams(name, version) {
+		if path := cycleFrom(repository, dep, version, stack, done); path != nil {
+			return path
+		}
+	}
+	done[name] = true
+	return nil
 }
 
 func createOrUpdate(external bool, w workflow.WorkflowInstanceId, tasks map[string]workflow.WorkflowInstanceId) {

@@ -59,3 +59,15 @@ func TestBuildDAGRefusesAMissingRequirementThatIsNotExternal(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A cycle is refused by name when the DAG is built: it would never run and
+// never fail (seen live: a run that ended "done" with nothing done).
+func TestBuildDAGRefusesACycle(t *testing.T) {
+	_, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.a", "b", "p.d.b", "c", "p.d.c", "a"), component())
+	if err == nil || !strings.Contains(err.Error(), "cycle") || !strings.Contains(err.Error(), "p.d.a") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.a", "", "p.d.b", "a", "p.d.c", "a,b"), component()); err != nil {
+		t.Fatalf("a diamond is not a cycle: %v", err)
+	}
+}
