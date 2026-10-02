@@ -208,3 +208,18 @@ func TestAPromptReadsAnUpstreamOutput(t *testing.T) {
 		t.Fatalf("the prompt carried the upstream output: %q", model.calls)
 	}
 }
+
+// A target carries the partition when each run must make its own.
+func TestATargetRendersThePartition(t *testing.T) {
+	root := t.TempDir()
+	d := &templates.YamlTaskDefinition{Target: &templates.YamlTarget{File: "DIGEST-{{.partition}}.md"}}
+	d.Name = "w.steps.digest"
+	b := Command().Bind(map[string]*templates.YamlTaskDefinition{d.Name: d}, root, Outputs{Dir: filepath.Join(root, "out")}, "2026-10-02T1317", "v")
+	if b.NewDataEndpoint(d.Name).Exists() {
+		t.Fatal("not yet")
+	}
+	os.WriteFile(filepath.Join(root, "DIGEST-2026-10-02T1317.md"), []byte("x"), 0o644)
+	if !b.NewDataEndpoint(d.Name).Exists() {
+		t.Fatal("the partition's file is the proof")
+	}
+}
