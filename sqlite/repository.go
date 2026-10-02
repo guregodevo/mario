@@ -25,7 +25,12 @@ func (t *SqliteWorkflowRepository) Close() {
 }
 
 func NewWorkflowRepository(dataSourceName string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
-	db_file := get_db_file(dataSourceName)
+	return open(get_db_file(dataSourceName), builderFunc)
+}
+
+// open prepares the database at db_file — creating the tables if they are
+// absent and leaving whatever they already hold untouched.
+func open(db_file string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
 	db, err := sql.Open("sqlite", db_file)
 	if err != nil {
 		log.Fatal(err)
@@ -338,4 +343,13 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 	}
 
 	return executions
+}
+
+// NewWorkflowRepositoryAt opens a repository whose database is at the given
+// path, exactly as given. NewWorkflowRepository keeps the historical
+// behaviour of resolving a bare name to ./<name>.db in the working
+// directory; a host that keeps its state somewhere of its choosing (a
+// project's .memdoor/, a data directory) names the file itself.
+func NewWorkflowRepositoryAt(dbFile string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
+	return open(dbFile, builderFunc)
 }

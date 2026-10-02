@@ -4,6 +4,7 @@ import (
 	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/workflow"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -79,5 +80,19 @@ func TestSQLiteWorkflowRepositorySurvivesAReopen(t *testing.T) {
 	byName := second.ExecutionsByName("release", 10)
 	if len(byName) == 0 {
 		t.Fatalf("ExecutionsByName(%q) found nothing after a reopen", "release")
+	}
+}
+
+// A host that keeps its state of its choosing names the file itself: the
+// database lands exactly where it asked, not in the working directory.
+func TestSQLiteWorkflowRepositoryAtHonoursThePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runs.db")
+
+	repo := NewWorkflowRepositoryAt(path, static.BuilderDummyFn)
+	repo.Close()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the database is not at the path it was given (%s): %v", path, err)
 	}
 }
