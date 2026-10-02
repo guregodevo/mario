@@ -96,3 +96,60 @@ func TestSQLiteWorkflowRepositoryAtHonoursThePath(t *testing.T) {
 		t.Fatalf("the database is not at the path it was given (%s): %v", path, err)
 	}
 }
+
+// A run table is what a person reads after the fact: the runs of a workflow,
+// newest first, each with the state of its tasks folded in. The test records
+// two runs of one workflow — one finished, one failed — and reads them back
+// after a reopen, which is the whole point of the repository.
+func TestSQLiteWorkflowRepositoryListsRuns(t *testing.T) {
+	name := "data_runs_test"
+	removeDB(name)
+	defer removeDB(name)
+
+	execution := func(partition, task string, status workflow.Status, start time.Time) workflow.WorkflowExecution {
+		return workflow.WorkflowExecution{
+			ExecutionId: task + "-" + partition,
+			WorkflowInstanceId: workflow.WorkflowInstanceId{
+				WorkflowId: workflow.WorkflowId{DName: name, DVersion: name + "@" + partition, DComponent: "memdoor"},
+				Partition:  partition,
+			},
+			StartDate: start,
+			Status:    status,
+		}
+	}
+
+	older := time.Now().Add(-time.Hour)
+	first := NewWorkflowRepository(name, static.BuilderDummyFn)
+	for _, e := range []workflow.WorkflowExecution{
+		execution("2026-10-02T090000", "tests", workflow.Done, older),
+		execution("2026-10-02T090000", "ship", workflow.Done, older),
+		execution("2026-10-03T090000", "tests", workflow.Done, time.Now()),
+		execution("2026-10-03T090000", "ship", workflow.Failed, time.Now()),
+	} {
+		if err := first.Upsert(e); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+	first.Close()
+
+	second := NewWorkflowRepository(name, static.BuilderDummyFn)
+	defer second.Close()
+
+	runs := second.Runs(name, 10)
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want 2 (one per partition): %+v", len(runs), runs)
+	}
+	// Newest first.
+	if runs[0].Partition != "2026-10-03T090000" {
+		t.Fatalf("first run is %q, want the newest (2026-10-03T090000)", runs[0].Partition)
+	}
+	if runs[0].Status != workflow.Failed {
+		t.Fatalf("the run whose ship task failed is %v, want Failed", runs[0].Status)
+	}
+	if runs[1].Status != workflow.Done {
+		t.Fatalf("the run whose tasks all finished is %v, want Done", runs[1].Status)
+	}
+	if runs[0].Executions != 2 {
+		t.Fatalf("the newest run has %d executions, want 2", runs[0].Executions)
+	}
+}

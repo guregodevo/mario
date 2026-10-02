@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/guregodevo/mario/logger"
 	"github.com/guregodevo/mario/workflow"
@@ -352,4 +353,123 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 // project's .memdoor/, a data directory) names the file itself.
 func NewWorkflowRepositoryAt(dbFile string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
 	return open(dbFile, builderFunc)
+}
+
+// RunSummary is one run of a workflow, as a person reads it afterwards: the
+// partition it was for, how many of its tasks are done, when it started and
+// how it ended. A run is a set of task executions sharing a partition; this
+// is their aggregate, which mario keeps no single row for.
+type RunSummary struct {
+	Name       string
+	Version    string
+	Partition  string
+	Started    time.Time
+	Ended      time.Time
+	Status     workflow.Status
+	Error      string
+	Executions int
+}
+
+// Runs lists the runs of a workflow, newest first, up to limit. It reads the
+// executions a run wrote and groups them by partition — the run's identity —
+// so a person can see what a workflow did after the process that ran it is
+// gone. A run with no executions is not a run.
+func (r *SqliteWorkflowRepository) Runs(name string, limit int) []RunSummary {
+	r.Exemux.Lock()
+	defer r.Exemux.Unlock()
+
+	if limit <= 0 {
+		limit = 20
+	}
+	query := `
+    SELECT Partition, Version, COUNT(*)
+    FROM workflow_executions
+    WHERE Name = ?
+    GROUP BY Partition
+    ORDER BY Partition DESC
+    LIMIT ?`
+
+	rows, err := r.db.Query(query, name, limit)
+	if err != nil {
+		log.Printf("Runs(%q): %v", name, err)
+		return nil
+	}
+
+	runs := make([]RunSummary, 0, limit)
+	for rows.Next() {
+		var run RunSummary
+		run.Name = name
+		if err := rows.Scan(&run.Partition, &run.Version, &run.Executions); err != nil {
+			rows.Close()
+			log.Printf("Runs(%q): %v", name, err)
+			return nil
+		}
+		runs = append(runs, run)
+	}
+	// Closed before the state pass below: that one queries the same
+	// database, and a cursor still open over it would be holding a
+	// connection the next query needs.
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("Runs(%q): %v", name, err)
+		return nil
+	}
+
+	// The state and the span of a run are its tasks': failed if any failed,
+	// done when all of them are, running while some have not started.
+	// The partition orders the runs: it is the run's own name (the moment
+	// it started, or the day, or whatever the host named), and it sorts
+	// lexically because it is a timestamp the host formats that way.
+	for i := range runs {
+		runs[i].Status, runs[i].Error, runs[i].Started, runs[i].Ended = r.runState(name, runs[i].Partition)
+	}
+	return runs
+}
+
+// runState folds a run's task executions into the run's own state, and
+// reports when the run began and last moved. Read from the plain columns
+// rather than an SQL aggregate: MIN(StartDate) arrives from the driver as
+// text (an aggregate has no column type to convert), and this needs a time.
+func (r *SqliteWorkflowRepository) runState(name, partition string) (workflow.Status, string, time.Time, time.Time) {
+	rows, err := r.db.Query(`SELECT Status, Error, StartDate, EndDate FROM workflow_executions WHERE Name = ? AND Partition = ?`, name, partition)
+	if err != nil {
+		log.Printf("runState(%q, %q): %v", name, partition, err)
+		return workflow.Scheduled, "", time.Time{}, time.Time{}
+	}
+	defer rows.Close()
+
+	state, errText, pending := workflow.Done, "", 0
+	var started, ended time.Time
+	for rows.Next() {
+		var status int
+		var errString string
+		var start, end sql.NullTime
+		if err := rows.Scan(&status, &errString, &start, &end); err != nil {
+			continue
+		}
+		if start.Valid && (started.IsZero() || start.Time.Before(started)) {
+			started = start.Time
+		}
+		if end.Valid && end.Time.After(ended) {
+			ended = end.Time
+		}
+		switch workflow.Status(status) {
+		case workflow.Failed:
+			state = workflow.Failed
+			if errText == "" {
+				errText = errString
+			}
+		case workflow.Done:
+			// keeps the run done unless a failure already said otherwise
+		default:
+			pending++
+		}
+	}
+	if state == workflow.Failed {
+		return workflow.Failed, errText, started, ended
+	}
+	if pending > 0 {
+		return workflow.Started, "", started, ended
+	}
+	return state, "", started, ended
 }
