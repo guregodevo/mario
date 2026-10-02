@@ -120,12 +120,27 @@ func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
 		d, known = b.Externals[name]
 	}
 	if known && HasTarget(d) {
+		// A target is a template too: "DIGEST-{{.partition}}.md" is a file
+		// each run makes its own; "DIGEST.md" is one file, done once it
+		// exists on any run.
 		if d.Target.File != "" {
-			return FileEndpoint(name, b.Dir, d.Target.File)
+			return FileEndpoint(name, b.Dir, b.renderOr(d, d.Target.File))
 		}
-		return CommandEndpoint(name, b.Dir, d.Target.Command)
+		return CommandEndpoint(name, b.Dir, b.renderOr(d, d.Target.Command))
 	}
 	return b.Outputs.Endpoint(name, b.Partition)
+}
+
+// renderOr renders text over the definition's args and partition, or
+// answers it as written when it is not a template that renders.
+func (b *Base) renderOr(d *templates.YamlTaskDefinition, text string) string {
+	if !strings.Contains(text, "{{") {
+		return text
+	}
+	if out, err := b.Render(d, text); err == nil {
+		return out
+	}
+	return text
 }
 
 func (b *Base) builder() workflow.WorflowBuilder {
