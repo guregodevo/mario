@@ -29,12 +29,29 @@ func NewWorkflowRepository(dataSourceName string, builderFunc workflow.GetBuilde
 	return open(get_db_file(dataSourceName), builderFunc)
 }
 
+// OpenWorkflowRepositoryAt is NewWorkflowRepositoryAt for a host that must
+// handle the failure: it returns the error instead of exiting the process.
+// A host that cannot open its run table — a project that went away, a
+// read-only disk — should carry on without it, not die on startup.
+func OpenWorkflowRepositoryAt(dbFile string, builderFunc workflow.GetBuilderFunc) (*SqliteWorkflowRepository, error) {
+	return openAt(dbFile, builderFunc)
+}
+
 // open prepares the database at db_file — creating the tables if they are
 // absent and leaving whatever they already hold untouched.
 func open(db_file string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
-	db, err := sql.Open("sqlite", db_file)
+	repo, err := openAt(db_file, builderFunc)
 	if err != nil {
 		log.Fatal(err)
+	}
+	return repo
+}
+
+// openAt does the work, reporting failure to the caller.
+func openAt(db_file string, builderFunc workflow.GetBuilderFunc) (*SqliteWorkflowRepository, error) {
+	db, err := sql.Open("sqlite", db_file)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create the tables if they do not exist. Nothing is dropped: a
@@ -48,7 +65,8 @@ func open(db_file string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRe
     	PRIMARY KEY (workflow_id, required_workflow_id, version)
 	);`)
 	if err != nil {
-		log.Fatal(err)
+		db.Close()
+		return nil, err
 	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS workflow_executions (
@@ -67,12 +85,13 @@ func open(db_file string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRe
 		component TEXT NOT NULL 
 	);`)
 	if err != nil {
-		log.Fatal(err)
+		db.Close()
+		return nil, err
 	}
 
 	db.Exec("PRAGMA journal_mode=WAL")
 
-	return &SqliteWorkflowRepository{db: db, builderFn: builderFunc, Instancemux: &sync.Mutex{}, Exemux: &sync.Mutex{}, dbFile: db_file}
+	return &SqliteWorkflowRepository{db: db, builderFn: builderFunc, Instancemux: &sync.Mutex{}, Exemux: &sync.Mutex{}, dbFile: db_file}, nil
 }
 
 func get_db_file(dataSourceName string) string {

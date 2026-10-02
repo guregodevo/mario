@@ -153,3 +153,19 @@ func TestSQLiteWorkflowRepositoryListsRuns(t *testing.T) {
 		t.Fatalf("the newest run has %d executions, want 2", runs[0].Executions)
 	}
 }
+
+// A host that cannot open its run table must be able to carry on without
+// it. OpenWorkflowRepositoryAt reports the failure; the older constructors
+// exit the process, which in a gateway means a dead gateway.
+func TestOpenWorkflowRepositoryAtReportsFailure(t *testing.T) {
+	// A path whose parent is a file, not a directory: it cannot be opened.
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenWorkflowRepositoryAt(filepath.Join(file, "runs.db"), static.BuilderDummyFn)
+	if err == nil {
+		repo.Close()
+		t.Fatal("opening a database under a regular file must fail, and be reported")
+	}
+}
