@@ -37,25 +37,46 @@ type LocalScheduler struct {
 	running     map[string]bool
 	completed   map[string]bool
 	ctx         context.Context // the run's context: cancelled, nothing more starts
-	events      Events          // nil-safe; see Events
+	events      chan<- Event    // nil when nobody listens; see Event
 }
 
-// Events is what a host may watch: every transition a task makes, named by
-// its workflow and partition so the host needs no type of this package to
-// listen. Declared here, in the engine, as the shape a listener satisfies;
-// every method is optional in spirit — a host implements the interface and
-// ignores what it does not need.
-type Events interface {
-	TaskStarted(name, partition string)
-	TaskDone(name, partition string)
-	TaskFailed(name, partition string, err error, willRetry bool)
-	// TaskSkipped: the task's target was already there, so it was marked
-	// done without running (a re-run resumes where the last one stopped).
-	TaskSkipped(name, partition string)
+// Event is one transition a task makes, sent in the order it happened on
+// the channel a host installs with SetEvents. The engine owns the channel's
+// end: it closes it when the run is complete. A host that keeps its own
+// listener interface reads the channel and calls it; the engine knows no
+// host.
+type Event struct {
+	Kind      EventKind
+	Name      string // the workflow's name
+	Partition string
+	Err       error // Failed: why
+	WillRetry bool  // Failed: whether the engine will try again
+	At        time.Time
 }
 
-// SetEvents installs a listener; nil removes it.
-func (e *LocalScheduler) SetEvents(ev Events) { e.events = ev }
+type EventKind string
+
+const (
+	Started EventKind = "started"
+	Done    EventKind = "done"
+	Failed  EventKind = "failed"
+	// Skipped: the task's target was already there, so it was marked done
+	// without running (a re-run resumes where the last one stopped).
+	Skipped EventKind = "skipped"
+)
+
+// SetEvents installs the channel the run's events are sent on, in order.
+// The engine closes it when WaitForCompletion is done; a nil channel means
+// nobody listens. Give it room (a few dozen) — a send blocks the scheduler
+// until the host reads.
+func (e *LocalScheduler) SetEvents(ch chan<- Event) { e.events = ch }
+
+func (e *LocalScheduler) emit(kind EventKind, name, partition string, err error, willRetry bool) {
+	if e.events == nil {
+		return
+	}
+	e.events <- Event{Kind: kind, Name: name, Partition: partition, Err: err, WillRetry: willRetry, At: time.Now()}
+}
 
 // SetContext makes a run cancellable: once ctx is done no further task
 // starts, and the executor sees the same ctx for the task it is running.
@@ -224,9 +245,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 					logger.Log.Info(fmt.Sprintf("Skipping %s ...", missingdep), "component", "local scheduler")
 					dep.SetStatus(workflow.Done)
 					e.repository.Upsert(dep.WorkflowExecution)
-					if e.events != nil {
-						e.events.TaskSkipped(dep.WorkflowName(), dep.Partition)
-					}
+					e.emit(Skipped, dep.WorkflowName(), dep.Partition, nil, false)
 				} else {
 					logger.Log.Error(fmt.Sprintf("Missing %s ...", missingdep), "component", "local scheduler")
 					missingDeps = append(missingDeps, dep.WorkflowInstanceId)
@@ -271,9 +290,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			e.repository.Upsert(t.WorkflowExecution)
 			e.complete(instanceId)
 			logger.Log.Info(fmt.Sprintf("Skipping task %s. Its target exists", instanceId), "component", "local scheduler")
-			if e.events != nil {
-				e.events.TaskSkipped(t.WorkflowName(), t.Partition)
-			}
+			e.emit(Skipped, t.WorkflowName(), t.Partition, nil, false)
 			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 			return
 		}
@@ -287,9 +304,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		t.StartDate = time.Now()
 		e.repository.Upsert(t.WorkflowExecution)
 		logger.Log.Info(fmt.Sprintf("Started task %s", instanceId), "component", "local scheduler")
-		if e.events != nil {
-			e.events.TaskStarted(t.WorkflowName(), t.Partition)
-		}
+		e.emit(Started, t.WorkflowName(), t.Partition, nil, false)
 
 		err := e.executor.Execute(e.ctx, t)
 		t.EndDate = time.Now()
@@ -298,9 +313,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			t.SetError(err)
 			e.repository.Upsert(t.WorkflowExecution)
 			e.release(instanceId)
-			if e.events != nil {
-				e.events.TaskFailed(t.WorkflowName(), t.Partition, err, t.Retries() < t.MaxRetries() && e.ctx.Err() == nil)
-			}
+			e.emit(Failed, t.WorkflowName(), t.Partition, err, t.Retries() < t.MaxRetries() && e.ctx.Err() == nil)
 			e.Accept(fmt.Errorf("Task failed %s: %v", instanceId, err))
 			e.retry(t.WorkflowInstanceId)
 		} else {
@@ -308,9 +321,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			e.repository.Upsert(t.WorkflowExecution)
 			e.complete(instanceId)
 			logger.Log.Info(fmt.Sprintf("Completed %s", instanceId), "component", "local scheduler")
-			if e.events != nil {
-				e.events.TaskDone(t.WorkflowName(), t.Partition)
-			}
+			e.emit(Done, t.WorkflowName(), t.Partition, nil, false)
 			e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 		}
 	}(taskId)
@@ -409,6 +420,10 @@ func (e *LocalScheduler) WaitForCompletion() error {
 
 	logger.Log.Info("All tasks have finished execution", "component", "local scheduler")
 	close(e.shutdownCh) // Signal to retryLoop to stop processing.
+	if e.events != nil {
+		close(e.events) // the run is complete: the host's reader ends
+		e.events = nil
+	}
 
 	select {
 	case err := <-e.errCh:

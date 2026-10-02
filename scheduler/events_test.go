@@ -15,19 +15,39 @@ import (
 	"github.com/guregodevo/mario/workflow"
 )
 
-// recorder is a host listening to a run, the way a UI would.
+// recorder is a host listening to a run, the way a UI would: it reads the
+// engine's channel and keeps the order.
 type recorder struct {
 	mu  sync.Mutex
 	seq []string
+	ch  chan Event
+	wg  sync.WaitGroup
 }
 
-func (r *recorder) add(s string)                       { r.mu.Lock(); r.seq = append(r.seq, s); r.mu.Unlock() }
-func (r *recorder) TaskStarted(name, partition string) { r.add("started " + name) }
-func (r *recorder) TaskDone(name, partition string)    { r.add("done " + name) }
-func (r *recorder) TaskSkipped(name, partition string) { r.add("skipped " + name) }
+func newRecorder() *recorder {
+	r := &recorder{ch: make(chan Event, 64)}
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		for ev := range r.ch {
+			line := string(ev.Kind) + " " + ev.Name
+			if ev.Kind == Failed {
+				line = fmt.Sprintf("failed %s retry=%v", ev.Name, ev.WillRetry)
+			}
+			r.mu.Lock()
+			r.seq = append(r.seq, line)
+			r.mu.Unlock()
+		}
+	}()
+	return r
+}
 
-func (r *recorder) TaskFailed(name, partition string, err error, willRetry bool) {
-	r.add(fmt.Sprintf("failed %s retry=%v", name, willRetry))
+// joined waits for the channel to close (the run is complete) and answers the order.
+func (r *recorder) joined() string {
+	r.wg.Wait()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.seq, " | ")
 }
 
 // A host sees every transition, in the order the graph imposes: B requires A,
@@ -41,18 +61,15 @@ func TestEventsFollowTheRun(t *testing.T) {
 	b := factory.NewExecutable("B")
 	repo.Requires(b.WorkflowName(), a.WorkflowName(), version)
 
-	rec := &recorder{}
+	rec := newRecorder()
 	s := NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
-	s.SetEvents(rec)
+	s.SetEvents(rec.ch)
 	if err := s.Trigger(b.WorkflowInstanceId); err != nil {
 		t.Fatal(err)
 	}
 	s.WaitForCompletion()
 
-	rec.mu.Lock()
-	got := strings.Join(rec.seq, " | ")
-	rec.mu.Unlock()
-	if got != "started A | done A | started B | done B" {
+	if got := rec.joined(); got != "started A | done A | started B | done B" {
 		t.Fatalf("events = %q", got)
 	}
 }
@@ -123,17 +140,14 @@ func TestATaskWhoseTargetExistsIsSkipped(t *testing.T) {
 	b := factory.NewExecutable("B")
 	repo.Requires(b.WorkflowName(), a.WorkflowName(), version)
 
-	rec := &recorder{}
+	rec := newRecorder()
 	s := NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
-	s.SetEvents(rec)
+	s.SetEvents(rec.ch)
 	if err := s.Trigger(a.WorkflowInstanceId); err != nil {
 		t.Fatal(err)
 	}
 	s.WaitForCompletion()
-	rec.mu.Lock()
-	got := strings.Join(rec.seq, " | ")
-	rec.mu.Unlock()
-	if got != "skipped A | started B | done B" {
+	if got := rec.joined(); got != "skipped A | started B | done B" {
 		t.Fatalf("events = %q", got)
 	}
 	ra, _ := repo.Fetch(a.InstanceId())

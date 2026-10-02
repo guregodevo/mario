@@ -46,6 +46,9 @@ type YamlTaskDefinition struct {
 	// Agent names who runs the task when the type is run by an agent (a
 	// coding agent, a reviewer): the factory for that type reads it.
 	Agent string `yaml:"agent,omitempty"`
+	// Command is what a command task runs (a shell line, a Go template over
+	// args and partition like the prompt).
+	Command string `yaml:"command,omitempty"`
 	// Target says what proves the task done, when the factory cannot tell
 	// from the name alone: a file that must exist, or a command that must
 	// exit 0. A task is done when its target exists, never when its run says so.

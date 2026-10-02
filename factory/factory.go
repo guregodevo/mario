@@ -2,6 +2,10 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+
 	"github.com/guregodevo/mario/templates"
 	"github.com/guregodevo/mario/workflow"
 )
@@ -21,9 +25,16 @@ type YAMLValidated interface {
 	NewYaml() *templates.YAMLValidator
 }
 
+// Schematic is the optional half of a factory that validates its own YAML:
+// the JSON schema for the task type it builds. NewValidator gathers them.
+type Schematic interface {
+	Schema() []byte
+}
+
 type Component interface {
 	Add(factory TaskFactory)
 	Get(name string) (TaskFactory, bool)
+	Names() []string
 }
 
 type MarioComponent struct {
@@ -46,4 +57,40 @@ func (r *MarioComponent) Add(factory TaskFactory) {
 func (r *MarioComponent) Get(name string) (TaskFactory, bool) {
 	factory, exists := r.factories[name]
 	return factory, exists
+}
+
+// Names lists the registered task types, sorted.
+func (r *MarioComponent) Names() []string {
+	names := make([]string, 0, len(r.factories))
+	for n := range r.factories {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// NewValidator validates task YAML against the registered types: the root
+// schema admits exactly the registered `type` names, and each type's own
+// schema is the one its factory carries (Schematic). A type without a
+// schema accepts any file whose type names it. The YAML says the type; the
+// factory behind it builds the task.
+func NewValidator(reg Component) *templates.YAMLValidator {
+	return templates.NewYAMLValidator(registryLoader{reg: reg})
+}
+
+type registryLoader struct{ reg Component }
+
+func (l registryLoader) LoadSchema(name string) ([]byte, error) {
+	if name == "root" {
+		names, _ := json.Marshal(l.reg.Names())
+		return []byte(fmt.Sprintf(`{"type":"object","properties":{"type":{"enum":%s}},"required":["type"]}`, names)), nil
+	}
+	f, ok := l.reg.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("no task type %q is registered (registered: %v)", name, l.reg.Names())
+	}
+	if s, ok := f.(Schematic); ok {
+		return s.Schema(), nil
+	}
+	return []byte(`{"type":"object"}`), nil
 }

@@ -33,7 +33,9 @@ func RenderLazy(tmpl *template.Template, vars map[string]interface{}, funcs temp
 	// Get the string value of the field to be used as the template content
 	templateContent := field.String()
 	if templateContent == "" {
-		return nil, fmt.Errorf("field '%s' is empty; no content to render", fieldName)
+		// A type that has no such field (a command task has no prompt)
+		// renders nothing; the type's factory reads what it needs.
+		return func() (string, error) { return "", nil }, nil
 	}
 
 	// Merge args from taskDef into vars
