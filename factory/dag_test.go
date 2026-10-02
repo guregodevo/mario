@@ -33,7 +33,7 @@ func component() Component {
 // An external requirement with no definition is registered as an external
 // task: waited for, never run.
 func TestBuildDAGRegistersAnUndefinedExternal(t *testing.T) {
-	tasks, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.a", "", "p.d.b", "p.d.a,p.d.gate!"), component())
+	tasks, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.a", "", "p.d.b", "a,gate!"), component())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +47,14 @@ func TestBuildDAGRegistersAnUndefinedExternal(t *testing.T) {
 // contradiction: the task would be run, and "external" says it must not be.
 // Refused, with both names, rather than running a gate nobody opened.
 func TestBuildDAGRefusesExternalOnADefinedTask(t *testing.T) {
-	_, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.approve", "", "p.d.ship", "p.d.approve!"), component())
+	_, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.approve", "", "p.d.ship", "approve!"), component())
 	if err == nil || !strings.Contains(err.Error(), "p.d.approve") || !strings.Contains(err.Error(), "external") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestBuildDAGRefusesAMissingRequirementThatIsNotExternal(t *testing.T) {
-	_, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.b", "p.d.ghost"), component())
+	_, err := BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs("p.d.b", "ghost"), component())
 	if err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("err = %v", err)
 	}
