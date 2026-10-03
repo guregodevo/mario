@@ -32,20 +32,23 @@ type YamlTaskDefinition struct {
 	Model              string            `yaml:"model"`
 	// Budget is the tokens an agent task may spend running on alone before
 	// it hands back (0: the runner's default).
-	Budget             int64             `yaml:"budget,omitempty"`
-	Tools              []string          `yaml:"tools,omitempty"`
-	ContentType        string            `yaml:"content_type,omitempty"`
-	Requires           []Requires        `yaml:"requires,omitempty"`
-	Args               map[string]string `yaml:"args,omitempty"`
-	StartDate          string            `yaml:"start_date,omitempty"`
-	StopDate           string            `yaml:"stop_date,omitempty"`
-	PartitionOffset    string            `yaml:"partition_offset,omitempty"`
-	MaximumBillingTier string            `yaml:"maximum_billing_tier,omitempty"`
-	UseLegacySQL       string            `yaml:"use_legacy_sql,omitempty"`
-	FlattenResults     string            `yaml:"flatten_results,omitempty"`
-	AllowLargeResults  string            `yaml:"allow_large_results,omitempty"`
-	Timeout            string            `yaml:"timeout,omitempty"`
-	MaxRetries         int32             `yaml:"max_retries,omitempty"`
+	Budget int64 `yaml:"budget,omitempty"`
+	// OutputSchema is the JSON Schema an agent task's answer must match: the
+	// answer is kept as that JSON, so the steps after it read typed data.
+	OutputSchema       map[string]interface{} `yaml:"output_schema,omitempty"`
+	Tools              []string               `yaml:"tools,omitempty"`
+	ContentType        string                 `yaml:"content_type,omitempty"`
+	Requires           []Requires             `yaml:"requires,omitempty"`
+	Args               map[string]string      `yaml:"args,omitempty"`
+	StartDate          string                 `yaml:"start_date,omitempty"`
+	StopDate           string                 `yaml:"stop_date,omitempty"`
+	PartitionOffset    string                 `yaml:"partition_offset,omitempty"`
+	MaximumBillingTier string                 `yaml:"maximum_billing_tier,omitempty"`
+	UseLegacySQL       string                 `yaml:"use_legacy_sql,omitempty"`
+	FlattenResults     string                 `yaml:"flatten_results,omitempty"`
+	AllowLargeResults  string                 `yaml:"allow_large_results,omitempty"`
+	Timeout            string                 `yaml:"timeout,omitempty"`
+	MaxRetries         int32                  `yaml:"max_retries,omitempty"`
 	// Agent names who runs the task when the type is run by an agent (a
 	// coding agent, a reviewer): the factory for that type reads it.
 	Agent string `yaml:"agent,omitempty"`
