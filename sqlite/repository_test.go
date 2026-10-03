@@ -112,7 +112,10 @@ func TestSQLiteWorkflowRepositoryListsRuns(t *testing.T) {
 		return workflow.WorkflowExecution{
 			ExecutionId: task + "-" + partition,
 			WorkflowInstanceId: workflow.WorkflowInstanceId{
-				WorkflowId: workflow.WorkflowId{DName: name, DVersion: name + "@" + partition, DComponent: "memdoor"},
+				// What a real run writes: the TASK's full name, the workflow
+				// only in the version (a fixture with the workflow's name
+				// hid a query that found no real run, 2026-10-03).
+				WorkflowId: workflow.WorkflowId{DName: name + ".steps." + task, DVersion: name + "@" + partition, DComponent: "memdoor"},
 				Partition:  partition,
 			},
 			StartDate: start,

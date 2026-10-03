@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -440,15 +441,20 @@ func (r *SqliteWorkflowRepository) Runs(name string, limit int) []RunSummary {
 	if limit <= 0 {
 		limit = 20
 	}
+	// A run's rows are its TASKS' executions — Name is the task's full
+	// name (release.steps.tests), never the workflow's. What every row of
+	// a run shares is its Version, "<workflow>@<partition>", so the
+	// workflow's runs are the versions that begin with its name (a query
+	// by Name = workflow found nothing, live 2026-10-03).
 	query := `
     SELECT Partition, Version, COUNT(*)
     FROM workflow_executions
-    WHERE Name = ?
-    GROUP BY Partition
+    WHERE Version LIKE ? ESCAPE '\'
+    GROUP BY Partition, Version
     ORDER BY Partition DESC
     LIMIT ?`
 
-	rows, err := r.db.Query(query, name, limit)
+	rows, err := r.db.Query(query, likePrefix(name+"@"), limit)
 	if err != nil {
 		log.Printf("Runs(%q): %v", name, err)
 		return nil
@@ -480,19 +486,26 @@ func (r *SqliteWorkflowRepository) Runs(name string, limit int) []RunSummary {
 	// it started, or the day, or whatever the host named), and it sorts
 	// lexically because it is a timestamp the host formats that way.
 	for i := range runs {
-		runs[i].Status, runs[i].Error, runs[i].Started, runs[i].Ended = r.runState(name, runs[i].Partition)
+		runs[i].Status, runs[i].Error, runs[i].Started, runs[i].Ended = r.runState(runs[i].Version, runs[i].Partition)
 	}
 	return runs
+}
+
+// likePrefix is s as a LIKE pattern matching strings that start with it,
+// with LIKE's own wildcards in s escaped.
+func likePrefix(s string) string {
+	s = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+	return s + "%"
 }
 
 // runState folds a run's task executions into the run's own state, and
 // reports when the run began and last moved. Read from the plain columns
 // rather than an SQL aggregate: MIN(StartDate) arrives from the driver as
 // text (an aggregate has no column type to convert), and this needs a time.
-func (r *SqliteWorkflowRepository) runState(name, partition string) (workflow.Status, string, time.Time, time.Time) {
-	rows, err := r.db.Query(`SELECT Status, Error, StartDate, EndDate FROM workflow_executions WHERE Name = ? AND Partition = ?`, name, partition)
+func (r *SqliteWorkflowRepository) runState(version, partition string) (workflow.Status, string, time.Time, time.Time) {
+	rows, err := r.db.Query(`SELECT Status, Error, StartDate, EndDate FROM workflow_executions WHERE Version = ? AND Partition = ?`, version, partition)
 	if err != nil {
-		log.Printf("runState(%q, %q): %v", name, partition, err)
+		log.Printf("runState(%q, %q): %v", version, partition, err)
 		return workflow.Scheduled, "", time.Time{}, time.Time{}
 	}
 	defer rows.Close()
