@@ -30,6 +30,9 @@ type YamlTaskDefinition struct {
 	Query              string            `yaml:"query,omitempty"`
 	Prompt             string            `yaml:"prompt"`
 	Model              string            `yaml:"model"`
+	// Budget is the tokens an agent task may spend running on alone before
+	// it hands back (0: the runner's default).
+	Budget             int64             `yaml:"budget,omitempty"`
 	Tools              []string          `yaml:"tools,omitempty"`
 	ContentType        string            `yaml:"content_type,omitempty"`
 	Requires           []Requires        `yaml:"requires,omitempty"`
