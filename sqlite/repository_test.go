@@ -1,10 +1,12 @@
 package sqlite
 
 import (
+	"fmt"
 	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/workflow"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -167,5 +169,59 @@ func TestOpenWorkflowRepositoryAtReportsFailure(t *testing.T) {
 	if err == nil {
 		repo.Close()
 		t.Fatal("opening a database under a regular file must fail, and be reported")
+	}
+}
+
+// A run finishes while another reads: many goroutines against one
+// repository, the way a scheduler writes a task's state as a run table is
+// read. database/sql pools connections, and two of them on one sqlite file
+// is what sqlite refuses — "unable to open database file: out of memory
+// (14)", a bare statement and not a memory condition. One connection, and a
+// lock per table, is what this proves.
+//
+// Run with -race: the unlocked reads this guards against were a genuine
+// data race, not only a lost write.
+func TestSQLiteWorkflowRepositoryUnderConcurrentUse(t *testing.T) {
+	name := "data_concurrent_test"
+	removeDB(name)
+	defer removeDB(name)
+
+	repo := NewWorkflowRepository(name, static.BuilderDummyFn)
+	defer repo.Close()
+
+	execution := func(i int) workflow.WorkflowExecution {
+		partition := fmt.Sprintf("2026-10-03T09%02d00", i)
+		return workflow.WorkflowExecution{
+			ExecutionId: fmt.Sprintf("tests-%s", partition),
+			WorkflowInstanceId: workflow.WorkflowInstanceId{
+				WorkflowId: workflow.WorkflowId{DName: name, DVersion: name + "@" + partition, DComponent: "memdoor"},
+				Partition:  partition,
+			},
+			StartDate: time.Now(),
+			Status:    workflow.Done,
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			e := execution(i)
+			if err := repo.Upsert(e); err != nil {
+				t.Errorf("Upsert: %v", err)
+			}
+			// A read of the same table, at the same time as the writes.
+			repo.Fetch(e.InstanceId())
+			repo.Executions(e.InstanceId())
+			repo.Runs(name, 10)
+			repo.Upstreams(e.InstanceId(), e.DVersion)
+		}(i)
+	}
+	wg.Wait()
+
+	// And everything written is there.
+	if got := len(repo.ExecutionsByName(name, 100)); got != 24 {
+		t.Fatalf("after concurrent use, %d executions are stored, want 24", got)
 	}
 }

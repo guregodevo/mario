@@ -54,6 +54,15 @@ func openAt(db_file string, builderFunc workflow.GetBuilderFunc) (*SqliteWorkflo
 		return nil, err
 	}
 
+	// ONE CONNECTION. database/sql pools connections, and two of them
+	// touching one sqlite file at once is exactly what sqlite refuses:
+	// a run finishing while another reads answers "unable to open database
+	// file: out of memory (14)" — a bare statement, not a memory condition.
+	// One connection is the fix: every statement waits its turn on the
+	// single handle instead of colliding with another one.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	// Create the tables if they do not exist. Nothing is dropped: a
 	// repository that deletes what it holds on every open cannot answer
 	// "what did this run do" after a restart, which is the whole reason a
@@ -152,8 +161,11 @@ func (r *SqliteWorkflowRepository) ExecutionsByName(name string, limit int) []wo
 }
 
 func (r *SqliteWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution, bool) {
-	r.Instancemux.Lock()
-	defer r.Instancemux.Unlock()
+	// Exemux, not Instancemux: this reads workflow_executions, and Upsert
+	// writes that same table under Exemux. Two locks over one table guard
+	// nothing — the read and the write would run at once.
+	r.Exemux.Lock()
+	defer r.Exemux.Unlock()
 
 	query := `SELECT e.ExecutionId, e.Name, e.Partition, e.max_retries, e.StartDate, e.EndDate, e.Status, e.Error, e.DParameters, e.Retries, e.Version, e.Component
               FROM workflow_executions e
@@ -213,6 +225,11 @@ func (r *SqliteWorkflowRepository) Requires(e string, required string, version s
 }
 
 func (r *SqliteWorkflowRepository) fetchIdsByQuery(query string, instanceID string, version string) map[string]bool {
+	// The lock lives here rather than in the four public methods that call
+	// it, so every way in is covered by one lock on the table it reads.
+	r.Instancemux.Lock()
+	defer r.Instancemux.Unlock()
+
 	workflows := make(map[string]bool, 0)
 
 	rows, err := r.db.Query(query, instanceID, version)
@@ -237,18 +254,33 @@ func (r *SqliteWorkflowRepository) fetchIdsByQuery(query string, instanceID stri
 func (r *SqliteWorkflowRepository) fetchWorkflowsByQuery(query string, instanceID string, version string) map[string]workflow.WorkflowExecution {
 	workflows := make(map[string]workflow.WorkflowExecution, 0)
 
-	rows, err := r.db.Query(query, instanceID, version)
-	if err != nil {
-		log.Printf("sqlite repository: %v", err)
-		return workflows
-	}
-	defer rows.Close()
+	// The ids first, under the lock. Fetching each one needs Fetch, which
+	// takes the same lock (Go's mutexes are not reentrant) and, with one
+	// connection, cannot run while this cursor holds that connection —
+	// so the cursor is closed before any Fetch, not during.
+	ids := make([]string, 0)
+	func() {
+		r.Instancemux.Lock()
+		defer r.Instancemux.Unlock()
 
-	for rows.Next() {
-		var workflowID string
-		if err := rows.Scan(&workflowID); err != nil {
+		rows, err := r.db.Query(query, instanceID, version)
+		if err != nil {
 			log.Printf("sqlite repository: %v", err)
+			return
 		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var workflowID string
+			if err := rows.Scan(&workflowID); err != nil {
+				log.Printf("sqlite repository: %v", err)
+				continue
+			}
+			ids = append(ids, workflowID)
+		}
+	}()
+
+	for _, workflowID := range ids {
 		if inst, ok := r.Fetch(workflowID); ok {
 			workflows[inst.InstanceId()] = inst
 		} else {
@@ -334,6 +366,9 @@ func (r *SqliteWorkflowRepository) Upsert(execution workflow.WorkflowExecution) 
 }
 
 func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.WorkflowExecution {
+	r.Exemux.Lock()
+	defer r.Exemux.Unlock()
+
 	executions := make(map[string]workflow.WorkflowExecution, 0)
 	query := `
     SELECT ExecutionId, Name, Partition, StartDate, EndDate, Status, Error, DParameters, Retries, Component, Version
