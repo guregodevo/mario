@@ -228,3 +228,31 @@ func TestSQLiteWorkflowRepositoryUnderConcurrentUse(t *testing.T) {
 		t.Fatalf("after concurrent use, %d executions are stored, want 24", got)
 	}
 }
+
+// An external task stays external across the table: read back without the
+// flag it looked runnable and was run instead of waited on (live
+// 2026-10-03, an approval gate).
+func TestSQLiteWorkflowRepositoryKeepsExternal(t *testing.T) {
+	name := "data_external_test"
+	removeDB(name)
+	defer removeDB(name)
+	gate := workflow.WorkflowExecution{
+		ExecutionId: "review-2026-10-03T180000",
+		WorkflowInstanceId: workflow.WorkflowInstanceId{
+			WorkflowId: workflow.WorkflowId{DName: "peer-comps.steps.review", DVersion: "peer-comps@2026-10-03T180000", DExternal: true},
+			Partition:  "2026-10-03T180000",
+		},
+		StartDate: time.Now(),
+	}
+	repo := NewWorkflowRepository(name, static.BuilderDummyFn)
+	if err := repo.Upsert(gate); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	repo.Close()
+	again := NewWorkflowRepository(name, static.BuilderDummyFn)
+	defer again.Close()
+	got, ok := again.Fetch(gate.InstanceId())
+	if !ok || !got.IsExternal() {
+		t.Fatalf("the gate must come back external: ok=%v %+v", ok, got)
+	}
+}

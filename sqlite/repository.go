@@ -92,9 +92,18 @@ func openAt(db_file string, builderFunc workflow.GetBuilderFunc) (*SqliteWorkflo
 		max_retries INT32 DEFAULT 3,
 		Retries INT32 DEFAULT 0,
 		Version TEXT NOT NULL,
-		component TEXT NOT NULL 
+		component TEXT NOT NULL,
+		external INTEGER NOT NULL DEFAULT 0
 	);`)
 	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	// A table made before the column existed gains it. Without it an
+	// external task read back from the table lost its flag and was run
+	// instead of waited on (live 2026-10-03: an approval gate failed with
+	// "is external: it is made outside this workflow").
+	if _, err := db.Exec(`ALTER TABLE workflow_executions ADD COLUMN external INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		db.Close()
 		return nil, err
 	}
@@ -168,7 +177,7 @@ func (r *SqliteWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution,
 	r.Exemux.Lock()
 	defer r.Exemux.Unlock()
 
-	query := `SELECT e.ExecutionId, e.Name, e.Partition, e.max_retries, e.StartDate, e.EndDate, e.Status, e.Error, e.DParameters, e.Retries, e.Version, e.Component
+	query := `SELECT e.ExecutionId, e.Name, e.Partition, e.max_retries, e.StartDate, e.EndDate, e.Status, e.Error, e.DParameters, e.Retries, e.Version, e.Component, e.external
               FROM workflow_executions e
               WHERE e.Id = ?
               ORDER BY e.StartDate DESC, e.ExecutionId DESC
@@ -179,7 +188,7 @@ func (r *SqliteWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution,
 	var errorString string
 	var parametersString string
 
-	err := r.db.QueryRow(query, id).Scan(&execution.ExecutionId, &execution.DName, &execution.Partition, &execution.DMaxRetries, &execution.StartDate, &execution.EndDate, &statusString, &errorString, &parametersString, &execution.DRetries, &execution.DVersion, &execution.DComponent)
+	err := r.db.QueryRow(query, id).Scan(&execution.ExecutionId, &execution.DName, &execution.Partition, &execution.DMaxRetries, &execution.StartDate, &execution.EndDate, &statusString, &errorString, &parametersString, &execution.DRetries, &execution.DVersion, &execution.DComponent, &execution.DExternal)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No matching workflow execution was found
@@ -355,10 +364,10 @@ func (r *SqliteWorkflowRepository) Upsert(execution workflow.WorkflowExecution) 
 		return fmt.Errorf("error marshalling parameters: %w", err)
 	}
 
-	query := `INSERT OR REPLACE INTO workflow_executions (ExecutionId, Id, Name, Partition, max_retries, StartDate, EndDate, Status, Error, DParameters, Retries, Version, Component) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT OR REPLACE INTO workflow_executions (ExecutionId, Id, Name, Partition, max_retries, StartDate, EndDate, Status, Error, DParameters, Retries, Version, Component, external) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err = r.db.Exec(query, execution.ExecutionId, execution.InstanceId(), execution.DName, execution.Partition, execution.DMaxRetries, execution.StartDate, execution.EndDate, execution.Status, execution.Error, parametersBytes, execution.DRetries, execution.DVersion, execution.DComponent)
+	_, err = r.db.Exec(query, execution.ExecutionId, execution.InstanceId(), execution.DName, execution.Partition, execution.DMaxRetries, execution.StartDate, execution.EndDate, execution.Status, execution.Error, parametersBytes, execution.DRetries, execution.DVersion, execution.DComponent, execution.DExternal)
 	if err != nil {
 		return fmt.Errorf("error executing upsert query: %w  Id : %s", err, execution.ExecutionId)
 	}
