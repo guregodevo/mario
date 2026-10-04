@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -48,6 +49,12 @@ func (r *RESTWorkflowRepository) WithToken(token string) *RESTWorkflowRepository
 	return r
 }
 
+// seg is a name, id, version or target as one path segment: a task is
+// named <group>/<task> in Memdoor, and a bare slash in the path is a route,
+// not a name (found 2026-10-05: Fetch of kpis/leader answered 404 while its
+// Upsert, a body, succeeded).
+func seg(v string) string { return url.PathEscape(v) }
+
 // do sends one request with the token, so no call is made without it.
 func (r *RESTWorkflowRepository) do(method, url string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequest(method, url, body)
@@ -75,7 +82,7 @@ func NewWorkflowRepository(builderFn workflow.GetBuilderFunc) (*RESTWorkflowRepo
 
 func (r *RESTWorkflowRepository) ExecutionsByName(name string, limit int) []workflow.WorkflowExecution {
 	// Construct the URL with query parameters for name and limit
-	url := fmt.Sprintf("%s/workflow/%s/latest_executions?limit=%d", r.baseURL, name, limit)
+	url := fmt.Sprintf("%s/workflow/%s/latest_executions?limit=%d", r.baseURL, seg(name), limit)
 
 	// Send the HTTP GET request
 	resp, err := r.do(http.MethodGet, url, nil)
@@ -103,7 +110,7 @@ func (r *RESTWorkflowRepository) ExecutionsByName(name string, limit int) []work
 
 func (r *RESTWorkflowRepository) Executions(id string) map[string]workflow.WorkflowExecution {
 	// Send an HTTP GET request to retrieve executions.
-	url := r.baseURL + "/workflow/" + id + "/executions"
+	url := r.baseURL + "/workflow/" + seg(id) + "/executions"
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -150,7 +157,7 @@ func (r *RESTWorkflowRepository) RevertRequires(e string, required string, versi
 func (r *RESTWorkflowRepository) changeDeps(e string, target string, prefix string, version string) {
 	var jsonData []byte
 	// Send an HTTP POST request to create or update the workflow instance.
-	url := r.baseURL + "/workflow/" + e + "/version/" + version + "/" + prefix + "/" + target
+	url := r.baseURL + "/workflow/" + seg(e) + "/version/" + seg(version) + "/" + prefix + "/" + seg(target)
 	resp, err := r.do(http.MethodPost, url, bytes.NewReader(jsonData))
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -165,7 +172,7 @@ func (r *RESTWorkflowRepository) changeDeps(e string, target string, prefix stri
 
 func (r *RESTWorkflowRepository) Upstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about upstream dependencies.
-	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/upstreams"
+	url := r.baseURL + "/workflow/" + seg(id) + "/version/" + seg(version) + "/upstreams"
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -189,7 +196,7 @@ func (r *RESTWorkflowRepository) Upstreams(id string, version string) map[string
 
 func (r *RESTWorkflowRepository) Downstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about downstream dependencies.
-	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/downstreams"
+	url := r.baseURL + "/workflow/" + seg(id) + "/version/" + seg(version) + "/downstreams"
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -214,7 +221,7 @@ func (r *RESTWorkflowRepository) Downstreams(id string, version string) map[stri
 
 func (r *RESTWorkflowRepository) DeepDownstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about deep downstream dependencies.
-	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/deep-downstreams"
+	url := r.baseURL + "/workflow/" + seg(id) + "/version/" + seg(version) + "/deep-downstreams"
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -239,7 +246,7 @@ func (r *RESTWorkflowRepository) DeepDownstreams(id string, version string) map[
 
 func (r *RESTWorkflowRepository) DeepUpstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about deep downstream dependencies.
-	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/deep-upstreams"
+	url := r.baseURL + "/workflow/" + seg(id) + "/version/" + seg(version) + "/deep-upstreams"
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
@@ -264,7 +271,7 @@ func (r *RESTWorkflowRepository) DeepUpstreams(id string, version string) map[st
 
 func (r *RESTWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution, bool) {
 	// Send an HTTP GET request to retrieve information about a workflow instance by its ID.
-	url := r.baseURL + "/workflow/" + id
+	url := r.baseURL + "/workflow/" + seg(id)
 	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
