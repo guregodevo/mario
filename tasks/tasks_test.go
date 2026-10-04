@@ -232,6 +232,30 @@ func TestATargetedTasksAnswerIsReadableDownstream(t *testing.T) {
 	}
 }
 
+// A targeted task skipped on a resume kept no answer this time; a prompt
+// reading it gets its proof named instead of failing.
+func TestASkippedTargetedTaskIsNamedByItsProof(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "ROWS.txt"), []byte("rows=300"), 0o644) // done before: the target holds
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"fetch":   "type: command\ncommand: echo should not run\ntarget:\n  file: ROWS.txt\n",
+		"summary": "type: llm\nprompt: \"report: {{ output \\\"fetch\\\" }}\"\nrequires:\n  - table_pattern: fetch\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.HasSuffix(seq, "done summary") {
+		t.Fatalf("events = %q", seq)
+	}
+	if len(model.calls) != 1 || !strings.Contains(model.calls[0], "already done: file ROWS.txt") {
+		t.Fatalf("the prompt names the proof: %q", model.calls)
+	}
+}
+
 // A target carries the partition when each run must make its own.
 func TestATargetRendersThePartition(t *testing.T) {
 	root := t.TempDir()

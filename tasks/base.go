@@ -183,6 +183,12 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 		}
 		out, err := b.Outputs.Read(full, b.Partition)
 		if err != nil {
+			// A targeted task skipped because its target already held (a
+			// resume) never ran this time, so no answer was kept. Its target
+			// is its proof: say that instead of failing the prompt.
+			if d, ok := b.Defs[full]; ok && HasTarget(d) && b.NewDataEndpoint(full).Exists() {
+				return "(" + name + " was already done: " + DescribeTarget(d) + " holds; its answer was not kept)", nil
+			}
 			return "", fmt.Errorf("output of %s is not there (is it required by this task?): %w", full, err)
 		}
 		return out, nil
