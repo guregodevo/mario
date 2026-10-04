@@ -14,6 +14,13 @@ import (
 // nameless fixed zone. Stored and read back, it is the same execution: the
 // dates, and everything the Scan reads after them — status above all.
 func TestAnExecutionFromTheWireReadsBackWhole(t *testing.T) {
+	// On a box in UTC (the server), JSON gives the time a nameless zone and
+	// the driver writes it as "+0200 +0200"; in a zone whose offset matches,
+	// JSON gives Local and the driver writes RFC 3339. The server's case is
+	// the one to guard, whatever zone the machine running this is in.
+	local := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = local })
 	repo, err := OpenWorkflowRepositoryAt(filepath.Join(t.TempDir(), "runs.db"), static.BuilderDummyFn)
 	if err != nil {
 		t.Fatal(err)
