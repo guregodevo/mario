@@ -281,6 +281,25 @@ func TestADoneTaskIsNotRunAgainOnTheSamePartition(t *testing.T) {
 	}
 }
 
+// Cancelling a command task ends at once, children included: a shell line
+// that sleeps must not hold the run until the sleep is over.
+func TestACancelledCommandEndsWithItsChildren(t *testing.T) {
+	root := t.TempDir()
+	b := Command().Bind(map[string]*templates.YamlTaskDefinition{}, root, Outputs{Dir: filepath.Join(root, "out")}, "p", "v")
+	d := &templates.YamlTaskDefinition{Command: "sleep 30 && echo late > LATE.txt"}
+	d.Name = "w.steps.long"
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, err := runCommand(ctx, b, d, d.Name)
+	if err == nil {
+		t.Fatal("a cancelled command is an error")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("cancel took %s: the shell's children held the run", took)
+	}
+}
+
 // A target carries the partition when each run must make its own.
 func TestATargetRendersThePartition(t *testing.T) {
 	root := t.TempDir()
