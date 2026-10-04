@@ -8,6 +8,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -98,6 +99,10 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		}
 		out, err := b.Run(ctx, b, d, name)
 		if err != nil {
+			// Its own clock ran out: say so, not the kill's "signal: killed".
+			if d.Timeout != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("task %s timed out after %s (its timeout) and was stopped", name, d.Timeout)
+			}
 			return err
 		}
 		if HasTarget(d) {

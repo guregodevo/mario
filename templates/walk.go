@@ -80,7 +80,13 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 
 			// Extract YAML definition and validate
 			if yamlDef, err := ExtractYAML(ioFileIO, validator, path); err != nil {
-				return err
+				// Name the file: a ten-step workflow refused for "colour is not
+				// allowed" left the person to find which step (2026-10-04).
+				rel, rerr := filepath.Rel(taskPath, path)
+				if rerr != nil {
+					rel = path
+				}
+				return fmt.Errorf("%s: %w", rel, err)
 			} else if yamlDef != nil {
 				yamlDef.Partition = partition
 				taskDefs[path] = yamlDef

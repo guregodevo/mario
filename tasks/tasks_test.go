@@ -300,6 +300,37 @@ func TestACancelledCommandEndsWithItsChildren(t *testing.T) {
 	}
 }
 
+// A task that outlives its own timeout says so, not "signal: killed".
+func TestATimedOutTaskSaysItsTimeout(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	reg.Add(&types[0])
+	defs := writeDAG(t, root, reg, map[string]string{
+		"slow": "type: command\ncommand: sleep 20\ntimeout: 1s\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.Contains(seq, "timed out after 1s") || strings.Contains(seq, "signal: killed") {
+		t.Fatalf("events = %q", seq)
+	}
+}
+
+// A refused file is named: which step of the workflow, not only its folder.
+func TestARefusedTaskFileIsNamed(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "wf", "steps")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "good.yaml"), []byte("type: command\ncommand: ls\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("type: command\ncommand: ls\ncolour: red\n"), 0o644)
+	reg := factory.NewComponent()
+	c := Command()
+	reg.Add(&c)
+	err, _ := templates.Walk(&fileio.LocalFileIO{}, nil, factory.NewValidator(reg), filepath.Join(root, "wf"), "p", "", "Prompt")
+	if err == nil || !strings.Contains(err.Error(), "steps/bad.yaml") || !strings.Contains(err.Error(), "colour") {
+		t.Fatalf("the refusal names the file and the key: %v", err)
+	}
+}
+
 // A target carries the partition when each run must make its own.
 func TestATargetRendersThePartition(t *testing.T) {
 	root := t.TempDir()
