@@ -4,26 +4,63 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/guregodevo/mario/logger"
+	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/workflow"
 )
 
+// RESTWorkflowRepository is a WorkflowRepository over HTTP: the state lives on
+// a mario-state server, and every call here is a request to it. A bearer
+// token (WithToken) names the caller to a server that keeps one table per
+// account.
 type RESTWorkflowRepository struct {
 	httpClient *http.Client
 	baseURL    string
+	token      string
 	builderFn  workflow.GetBuilderFunc
 }
 
+const restTimeout = 30 * time.Second
+
 // NewRESTWorkflowRepository creates a new instance of RESTWorkflowRepository.
+// A nil builderFn builds executions with the dummy builder, as a host that
+// only reads and writes state needs nothing more.
 func NewRESTWorkflowRepository(apiURL string, builderFn workflow.GetBuilderFunc) *RESTWorkflowRepository {
+	if builderFn == nil {
+		builderFn = static.BuilderDummyFn
+	}
 	return &RESTWorkflowRepository{
-		httpClient: &http.Client{},
-		baseURL:    apiURL,
+		httpClient: &http.Client{Timeout: restTimeout},
+		baseURL:    strings.TrimRight(apiURL, "/"),
 		builderFn:  builderFn,
 	}
+}
+
+// WithToken sends this bearer token with every request.
+func (r *RESTWorkflowRepository) WithToken(token string) *RESTWorkflowRepository {
+	r.token = token
+	return r
+}
+
+// do sends one request with the token, so no call is made without it.
+func (r *RESTWorkflowRepository) do(method, url string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	return r.httpClient.Do(req)
 }
 
 // NewWorkflowRepository builds a REST repository on the API_URL environment
@@ -41,7 +78,7 @@ func (r *RESTWorkflowRepository) ExecutionsByName(name string, limit int) []work
 	url := fmt.Sprintf("%s/workflow/%s/latest_executions?limit=%d", r.baseURL, name, limit)
 
 	// Send the HTTP GET request
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return nil
@@ -67,7 +104,7 @@ func (r *RESTWorkflowRepository) ExecutionsByName(name string, limit int) []work
 func (r *RESTWorkflowRepository) Executions(id string) map[string]workflow.WorkflowExecution {
 	// Send an HTTP GET request to retrieve executions.
 	url := r.baseURL + "/workflow/" + id + "/executions"
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return make(map[string]workflow.WorkflowExecution, 0)
@@ -114,7 +151,7 @@ func (r *RESTWorkflowRepository) changeDeps(e string, target string, prefix stri
 	var jsonData []byte
 	// Send an HTTP POST request to create or update the workflow instance.
 	url := r.baseURL + "/workflow/" + e + "/version/" + version + "/" + prefix + "/" + target
-	resp, err := r.httpClient.Post(url, "application/json", bytes.NewReader(jsonData))
+	resp, err := r.do(http.MethodPost, url, bytes.NewReader(jsonData))
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return
@@ -129,7 +166,7 @@ func (r *RESTWorkflowRepository) changeDeps(e string, target string, prefix stri
 func (r *RESTWorkflowRepository) Upstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about upstream dependencies.
 	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/upstreams"
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return make(map[string]bool, 0)
@@ -153,7 +190,7 @@ func (r *RESTWorkflowRepository) Upstreams(id string, version string) map[string
 func (r *RESTWorkflowRepository) Downstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about downstream dependencies.
 	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/downstreams"
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return make(map[string]bool, 0)
@@ -178,7 +215,7 @@ func (r *RESTWorkflowRepository) Downstreams(id string, version string) map[stri
 func (r *RESTWorkflowRepository) DeepDownstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about deep downstream dependencies.
 	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/deep-downstreams"
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return make(map[string]bool, 0)
@@ -203,7 +240,7 @@ func (r *RESTWorkflowRepository) DeepDownstreams(id string, version string) map[
 func (r *RESTWorkflowRepository) DeepUpstreams(id string, version string) map[string]bool {
 	// Send an HTTP GET request to retrieve information about deep downstream dependencies.
 	url := r.baseURL + "/workflow/" + id + "/version/" + version + "/deep-upstreams"
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return make(map[string]bool, 0)
@@ -228,7 +265,7 @@ func (r *RESTWorkflowRepository) DeepUpstreams(id string, version string) map[st
 func (r *RESTWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution, bool) {
 	// Send an HTTP GET request to retrieve information about a workflow instance by its ID.
 	url := r.baseURL + "/workflow/" + id
-	resp, err := r.httpClient.Get(url)
+	resp, err := r.do(http.MethodGet, url, nil)
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
 		return workflow.WorkflowExecution{}, false
@@ -262,26 +299,22 @@ func (r *RESTWorkflowRepository) Fetch(id string) (workflow.WorkflowExecution, b
 
 func (r *RESTWorkflowRepository) Upsert(instance workflow.WorkflowExecution) error {
 	data := GrpcExecutionOf(instance)
-	// Marshal the instance data to JSON.
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		logger.Log.Error(fmt.Sprintf("Failed to marshal JSON data: %v", err))
-		return nil
+		return fmt.Errorf("marshal %s: %w", instance.InstanceId(), err)
 	}
-
-	// Send an HTTP POST request to create or update the workflow instance.
-	url := r.baseURL + "/workflow"
-	resp, err := r.httpClient.Post(url, "application/json", bytes.NewReader(jsonData))
+	// AN UPSERT THAT DID NOT HAPPEN IS AN ERROR, not a log line: the run
+	// that wrote it believes the state is kept. This returned nil on every
+	// failure until 2026-10-05.
+	resp, err := r.do(http.MethodPost, r.baseURL+"/workflow", bytes.NewReader(jsonData))
 	if err != nil {
-		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
-		return nil
+		return fmt.Errorf("upsert %s: %w", instance.InstanceId(), err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		logger.Log.Error(fmt.Sprintf("HTTP request failed with status code: %d", resp.StatusCode))
-	} else {
-		logger.Log.Info(fmt.Sprintf("Upserted %s  : ", instance.InstanceId()), "component", "api")
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("upsert %s: %s %s", instance.InstanceId(), resp.Status, strings.TrimSpace(string(msg)))
 	}
+	logger.Log.Info(fmt.Sprintf("Upserted %s  : ", instance.InstanceId()), "component", "api")
 	return nil
 }
