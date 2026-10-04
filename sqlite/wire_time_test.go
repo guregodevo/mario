@@ -3,6 +3,7 @@ package sqlite
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,17 @@ func TestAnExecutionFromTheWireReadsBackWhole(t *testing.T) {
 	}
 	if err := repo.Upsert(wire); err != nil {
 		t.Fatal(err)
+	}
+	// The text in the table is UTC, whatever zone the time arrived in: the
+	// form the driver reads back on any machine. A nameless +0200 written as
+	// "+0200 +0200" was not read on a UTC box (live 2026-10-05), and this
+	// laptop's zone turns the same JSON into "+0200 CEST", which is.
+	var stored string
+	if err := repo.db.QueryRow(`SELECT StartDate FROM workflow_executions WHERE Id = ?`, exe.InstanceId()).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(stored, "+0000 UTC") {
+		t.Fatalf("StartDate is stored as %q, want UTC text", stored)
 	}
 	got, ok := repo.Fetch(exe.InstanceId())
 	if !ok {

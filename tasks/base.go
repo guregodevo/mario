@@ -37,6 +37,11 @@ type Base struct {
 	// in another DAG and are only checked here, by THEIR target (mario's
 	// cross-DAG dependency through a data endpoint). Optional.
 	Externals map[string]*templates.YamlTaskDefinition
+	// ExternalDirs says where an external's target is checked when it is
+	// not this run's directory: the project that makes it (a dependency on
+	// another repository's workflow — each project publishes what it
+	// produces as a target, and a consumer checks it there, never runs it).
+	ExternalDirs map[string]string
 	Dir       string  // where targets are checked and commands run
 	Outputs   Outputs // where outputs are kept when no target is named
 	Partition string
@@ -125,17 +130,21 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 // its output by convention — also for an external, whose maker writes there.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
 	d, known := b.Defs[name]
+	dir := b.Dir
 	if !known {
 		d, known = b.Externals[name]
+		if ext, ok := b.ExternalDirs[name]; ok && ext != "" {
+			dir = ext // the maker's project, not this run's
+		}
 	}
 	if known && HasTarget(d) {
 		// A target is a template too: "DIGEST-{{.partition}}.md" is a file
 		// each run makes its own; "DIGEST.md" is one file, done once it
 		// exists on any run.
 		if d.Target.File != "" {
-			return FileEndpoint(name, b.Dir, b.renderOr(d, d.Target.File))
+			return FileEndpoint(name, dir, b.renderOr(d, d.Target.File))
 		}
-		return CommandEndpoint(name, b.Dir, b.renderOr(d, d.Target.Command))
+		return CommandEndpoint(name, dir, b.renderOr(d, d.Target.Command))
 	}
 	return b.Outputs.Endpoint(name, b.Partition)
 }
