@@ -292,9 +292,16 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		// depends on it may go. Checked HERE, after the requirements, so a
 		// DAG resolves root to sink: a downstream never settles before what
 		// it requires has.
-		if t.GetStatus() != workflow.Done && t.Target().Exists() {
-			t.SetStatus(workflow.Done)
-			e.repository.Upsert(t.WorkflowExecution)
+		// Done before (the same partition triggered again: a rerun, a
+		// resume) counts too: the target is the proof either way. Skipping
+		// only what was not yet Done re-ran a finished sink on every
+		// trigger (a Memdoor rerun, 2026-10-04: a one-step workflow rewrote
+		// its file on each run of the same partition).
+		if t.Target().Exists() {
+			if t.GetStatus() != workflow.Done {
+				t.SetStatus(workflow.Done)
+				e.repository.Upsert(t.WorkflowExecution)
+			}
 			e.complete(instanceId)
 			logger.Log.Info(fmt.Sprintf("Skipping task %s. Its target exists", instanceId), "component", "local scheduler")
 			e.emit(Skipped, t.WorkflowName(), t.Partition, nil, false)

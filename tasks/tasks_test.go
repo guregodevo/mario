@@ -51,12 +51,17 @@ func writeDAG(t *testing.T, root string, reg factory.Component, files map[string
 // completion, answering the ordered events.
 func run(t *testing.T, root string, types []Base, defs map[string]*templates.YamlTaskDefinition) []string {
 	t.Helper()
+	return runOn(t, root, types, defs, static.NewWorkflowRepository())
+}
+
+// runOn is run against a given repository: two runs of one partition share it.
+func runOn(t *testing.T, root string, types []Base, defs map[string]*templates.YamlTaskDefinition, repo *static.StaticWorkflowRepository) []string {
+	t.Helper()
 	reg := factory.NewComponent()
 	outputs := Outputs{Dir: filepath.Join(root, "out")}
 	for _, b := range types {
 		reg.Add(b.Bind(defs, root, outputs, "2026-10-02", "v"))
 	}
-	repo := static.NewWorkflowRepository()
 	ids, err := factory.BuildDAG("v", "2026-10-02", "c", repo, defs, reg)
 	if err != nil {
 		t.Fatal(err)
@@ -253,6 +258,26 @@ func TestASkippedTargetedTaskIsNamedByItsProof(t *testing.T) {
 	}
 	if len(model.calls) != 1 || !strings.Contains(model.calls[0], "already done: file ROWS.txt") {
 		t.Fatalf("the prompt names the proof: %q", model.calls)
+	}
+}
+
+// The same partition triggered twice (a rerun, a resume): a task whose
+// target holds is not run again, even when the first run already recorded it
+// Done. The command appends, so a second execution would show as a 2nd line.
+func TestADoneTaskIsNotRunAgainOnTheSamePartition(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	reg.Add(&types[0])
+	defs := writeDAG(t, root, reg, map[string]string{
+		"stamp": "type: command\ncommand: echo ran >> STAMP.txt\ntarget:\n  file: STAMP.txt\n",
+	})
+	repo := static.NewWorkflowRepository()
+	runOn(t, root, types, defs, repo)
+	seq := strings.Join(runOn(t, root, types, defs, repo), " | ")
+	b, _ := os.ReadFile(filepath.Join(root, "STAMP.txt"))
+	if got := strings.Count(string(b), "ran"); got != 1 {
+		t.Fatalf("the task ran %d times on one partition; events of the second run: %q", got, seq)
 	}
 }
 
