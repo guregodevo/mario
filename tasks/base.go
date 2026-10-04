@@ -106,8 +106,12 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			if !b.NewDataEndpoint(name).Exists() {
 				return fmt.Errorf("task %s finished but its target is not there (%s)", name, DescribeTarget(d))
 			}
-			return nil
 		}
+		// The answer is kept either way, so a task after it can read it with
+		// {{ output "name" }}. With a target it is not the proof — the target
+		// is — only what the task said. Dropping it failed every downstream
+		// prompt that read a targeted task's answer ("output of … is not
+		// there", a Memdoor run 2026-10-04).
 		return b.Outputs.Write(name, b.Partition, out)
 	}
 }

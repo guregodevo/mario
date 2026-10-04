@@ -209,6 +209,29 @@ func TestAPromptReadsAnUpstreamOutput(t *testing.T) {
 	}
 }
 
+// A task with a target is proven by the target, and its answer is still
+// kept: a later prompt can read it with {{ output "name" }}.
+func TestATargetedTasksAnswerIsReadableDownstream(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"fetch":   "type: command\ncommand: echo rows=300 > ROWS.txt && echo fetched 300 rows\ntarget:\n  file: ROWS.txt\n",
+		"summary": "type: llm\nprompt: \"report: {{ output \\\"fetch\\\" }}\"\nrequires:\n  - table_pattern: fetch\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.HasSuffix(seq, "done summary") {
+		t.Fatalf("events = %q", seq)
+	}
+	if len(model.calls) != 1 || !strings.Contains(model.calls[0], "fetched 300 rows") {
+		t.Fatalf("the targeted task's answer reached the prompt: %q", model.calls)
+	}
+}
+
 // A target carries the partition when each run must make its own.
 func TestATargetRendersThePartition(t *testing.T) {
 	root := t.TempDir()
