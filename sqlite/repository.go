@@ -367,7 +367,12 @@ func (r *SqliteWorkflowRepository) Upsert(execution workflow.WorkflowExecution) 
 	query := `INSERT OR REPLACE INTO workflow_executions (ExecutionId, Id, Name, Partition, max_retries, StartDate, EndDate, Status, Error, DParameters, Retries, Version, Component, external) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err = r.db.Exec(query, execution.ExecutionId, execution.InstanceId(), execution.DName, execution.Partition, execution.DMaxRetries, execution.StartDate, execution.EndDate, execution.Status, execution.Error, parametersBytes, execution.DRetries, execution.DVersion, execution.DComponent, execution.DExternal)
+	// Dates go in as UTC. A time that came through JSON carries a nameless
+	// fixed zone, and the driver writes such a time in a text it cannot read
+	// back ("unsupported Scan, storing driver.Value type string into
+	// *time.Time"); the Scan then stops at StartDate and a done execution
+	// reads back as scheduled (live 2026-10-05, behind mario-state).
+	_, err = r.db.Exec(query, execution.ExecutionId, execution.InstanceId(), execution.DName, execution.Partition, execution.DMaxRetries, execution.StartDate.UTC(), execution.EndDate.UTC(), execution.Status, execution.Error, parametersBytes, execution.DRetries, execution.DVersion, execution.DComponent, execution.DExternal)
 	if err != nil {
 		return fmt.Errorf("error executing upsert query: %w  Id : %s", err, execution.ExecutionId)
 	}
