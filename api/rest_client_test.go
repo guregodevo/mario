@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/guregodevo/mario/static"
+	"github.com/guregodevo/mario/workflow"
 )
 
 // The client sends its token on every request, a nil builder is the dummy
@@ -44,5 +45,21 @@ func TestRESTClientTokenAndErrors(t *testing.T) {
 	}
 	if len(auth) != 2 {
 		t.Fatalf("expected 2 requests, saw %d", len(auth))
+	}
+}
+
+// Runs asks the server for the workflow's runs and reads them whole.
+func TestRESTClientListsRuns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/workflow/hello/runs" || r.URL.Query().Get("limit") != "5" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]workflow.RunSummary{{Name: "hello", Partition: "2026-10-05", Version: "hello@2026-10-05", Status: workflow.Done, Executions: 2}})
+	}))
+	defer srv.Close()
+	runs := NewRESTWorkflowRepository(srv.URL, nil).Runs("hello", 5)
+	if len(runs) != 1 || runs[0].Partition != "2026-10-05" || runs[0].Status != workflow.Done || runs[0].Executions != 2 {
+		t.Fatalf("runs: %+v", runs)
 	}
 }

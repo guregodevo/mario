@@ -433,16 +433,8 @@ func NewWorkflowRepositoryAt(dbFile string, builderFunc workflow.GetBuilderFunc)
 // partition it was for, how many of its tasks are done, when it started and
 // how it ended. A run is a set of task executions sharing a partition; this
 // is their aggregate, which mario keeps no single row for.
-type RunSummary struct {
-	Name       string
-	Version    string
-	Partition  string
-	Started    time.Time
-	Ended      time.Time
-	Status     workflow.Status
-	Error      string
-	Executions int
-}
+// RunSummary is workflow.RunSummary, kept under this name for callers.
+type RunSummary = workflow.RunSummary
 
 // Runs lists the runs of a workflow, newest first, up to limit. It reads the
 // executions a run wrote and groups them by partition — the run's identity —

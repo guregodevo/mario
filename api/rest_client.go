@@ -325,3 +325,28 @@ func (r *RESTWorkflowRepository) Upsert(instance workflow.WorkflowExecution) err
 	logger.Log.Info(fmt.Sprintf("Upserted %s  : ", instance.InstanceId()), "component", "api")
 	return nil
 }
+
+// Runs lists the workflow's runs as the server's table does
+// (GET /workflow/<name>/runs?limit=), newest first; nil when the server
+// cannot list them or does not answer.
+func (r *RESTWorkflowRepository) Runs(name string, limit int) []workflow.RunSummary {
+	url := fmt.Sprintf("%s/workflow/%s/runs?limit=%d", r.baseURL, seg(name), limit)
+	resp, err := r.do(http.MethodGet, url, nil)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to send HTTP request: %v", err))
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Log.Error(fmt.Sprintf("HTTP request failed with status code: %d", resp.StatusCode))
+		return nil
+	}
+	var runs []workflow.RunSummary
+	if err := json.NewDecoder(resp.Body).Decode(&runs); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to parse JSON response: %v", err))
+		return nil
+	}
+	return runs
+}
+
+var _ workflow.RunLister = (*RESTWorkflowRepository)(nil)
