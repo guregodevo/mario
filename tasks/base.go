@@ -42,10 +42,10 @@ type Base struct {
 	// another repository's workflow — each project publishes what it
 	// produces as a target, and a consumer checks it there, never runs it).
 	ExternalDirs map[string]string
-	Dir       string  // where targets are checked and commands run
-	Outputs   Outputs // where outputs are kept when no target is named
-	Partition string
-	Version   string
+	Dir          string  // where targets are checked and commands run
+	Outputs      Outputs // where outputs are kept when no target is named
+	Partition    string
+	Version      string
 }
 
 // Bind answers a copy tied to one run: its definitions, directory, outputs,
@@ -113,8 +113,15 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		if HasTarget(d) {
 			// The target is the proof: a run that returned without error but
 			// left no target behind did not do the work.
-			if !b.NewDataEndpoint(name).Exists() {
-				return fmt.Errorf("task %s finished but its target is not there (%s)", name, DescribeTarget(d))
+			if ep := b.NewDataEndpoint(name); !ep.Exists() {
+				// Name the target as it was checked, rendered: a failure
+				// that printed the template ("file rules/{{.partition}}.md")
+				// sent a person looking for a file by that name (2026-10-07).
+				what := DescribeTarget(d)
+				if s, ok := ep.(fmt.Stringer); ok {
+					what = s.String()
+				}
+				return fmt.Errorf("task %s finished but its target is not there (%s)", name, what)
 			}
 		}
 		// The answer is kept either way, so a task after it can read it with
