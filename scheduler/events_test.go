@@ -184,3 +184,44 @@ func TestASkippedDAGResolvesRootToSink(t *testing.T) {
 		t.Fatalf("events = %q", got)
 	}
 }
+
+// Done is a record; the target is the proof. The same partition run again
+// after A's target stopped holding (deleted, or a staleness command that
+// now fails) runs A again before B — B's record of A being done does not
+// stand in for A's target, as in Luigi, where complete() is asked on
+// every run. Found live 2026-10-07: a nightly build → grade → file whose
+// grade was older than the build's start stamp was still filed.
+func TestAStaleRequirementRunsAgain(t *testing.T) {
+	version := fmt.Sprintf("%d", time.Now().UnixNano())
+	partition := "2026-10-07"
+	factory := &presentFactory{DummyTaskFactory: static.DummyTaskFactory{Version: version, Partition: partition, Component: utils.COMPONENT},
+		present: map[string]bool{}}
+	repo := static.NewWorkflowRepository()
+	a := factory.NewExecutable("A")
+	b := factory.NewExecutable("B")
+	repo.Requires(b.WorkflowName(), a.WorkflowName(), version)
+
+	first := newRecorder()
+	s := NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
+	s.SetEvents(first.ch)
+	if err := s.Trigger(b.WorkflowInstanceId); err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForCompletion()
+	if got := first.joined(); got != "started A | done A | started B | done B" {
+		t.Fatalf("first run events = %q", got)
+	}
+
+	// A's target held after the first run and holds no more; B's never did.
+	factory.present["A"] = false
+	second := newRecorder()
+	s = NewLocalScheduler(true, true, static.NewChannelQueue(100), static.NewChannelQueue(100), repo, factory, engine.NewLocalExecutor(), time.Millisecond)
+	s.SetEvents(second.ch)
+	if err := s.Trigger(b.WorkflowInstanceId); err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForCompletion()
+	if got := second.joined(); got != "started A | done A | started B | done B" {
+		t.Fatalf("second run events = %q (A was done once, but its target no longer holds)", got)
+	}
+}

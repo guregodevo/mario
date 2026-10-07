@@ -239,7 +239,18 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			logger.Log.Info(fmt.Sprintf("Checking %s ...", workflow.InstanceIdOf(depName, id.Partition)), "component", "local scheduler")
 
 			dep := e.fetchOrCreate(depName, id.Partition)
-			if dep.Status != workflow.Done {
+			// Done from a PAST run is a record; the target is the proof. A
+			// requirement whose target no longer holds — deleted, or a
+			// command target that now fails (a staleness check against a
+			// newer start stamp) — is missing again and runs again, as in
+			// Luigi, where complete() is asked on every run. One that ran
+			// or was skipped in THIS run is trusted as it is: re-asking its
+			// target would run a task that produced nothing forever. Found
+			// live 2026-10-07: a rerun of the same partition re-ran the sink
+			// because its own target failed, but trusted its stale upstream
+			// grade on its Done record; a result was filed from stale input.
+			stale := dep.Status == workflow.Done && !dep.IsExternal() && !e.isCompleted(dep.InstanceId()) && !dep.Target().Exists()
+			if dep.Status != workflow.Done || stale {
 				missingdep := fmt.Errorf(" %s Job Status %d", dep.Target().Name(), dep.GetStatus())
 				// An EXTERNAL requirement is settled here by its target: nobody
 				// runs it. A requirement of this DAG is not — it is triggered, and
