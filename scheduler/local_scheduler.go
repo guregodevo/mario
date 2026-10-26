@@ -338,9 +338,18 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			t.SetError(err)
 			e.repository.Upsert(t.WorkflowExecution)
 			e.release(instanceId)
-			e.emit(Failed, t.WorkflowName(), t.Partition, err, t.Retries() < t.MaxRetries() && e.ctx.Err() == nil)
+			willRetry := t.Retries() < t.MaxRetries() && e.ctx.Err() == nil
+			e.emit(Failed, t.WorkflowName(), t.Partition, err, willRetry)
 			e.Accept(fmt.Errorf("Task failed %s: %v", instanceId, err))
-			e.retry(t.WorkflowInstanceId)
+			// A task that failed because the run was cancelled is not retried:
+			// retrying it re-triggered its requirements through the backfill,
+			// which failed on the same cancelled context and were retried in
+			// turn, a loop that kept a stopped run "stopping" and flooded the
+			// queues (Memdoor, 2026-10-26: two stopped runs submitted 140
+			// tasks a minute under a live one).
+			if willRetry {
+				e.retry(t.WorkflowInstanceId)
+			}
 		} else {
 			t.SetStatus(workflow.Done)
 			e.repository.Upsert(t.WorkflowExecution)
@@ -368,7 +377,7 @@ func (e *LocalScheduler) notifyDownstreams(taskName, partition, version string) 
 }
 
 func (e *LocalScheduler) triggerIfRequired(task workflow.WorkflowExecution) {
-	if e.isCompleted(task.InstanceId()) {
+	if e.isCompleted(task.InstanceId()) || e.ctx.Err() != nil {
 		return
 	}
 	if (e.backfill || task.Status != workflow.Done) && e.allDependenciesCompleted(task.WorkflowName(), task.Partition, task.Version()) {
@@ -409,6 +418,11 @@ func (e *LocalScheduler) retryLoop() {
 			}
 			rTaskExe := e.fetchOrCreate(rTaskId.WorkflowName(), rTaskId.Partition)
 
+			if e.ctx.Err() != nil {
+				atomic.AddInt32(&e.counter, -1)
+				logger.Log.Info(fmt.Sprintf("Dropping retry of %s: run cancelled", rTaskExe.Target().Name()), "component", "local scheduler")
+				continue
+			}
 			if rTaskExe.Retries() < rTaskExe.MaxRetries() {
 				go e.handleRetry(rTaskExe)
 			} else {
