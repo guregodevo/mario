@@ -36,6 +36,7 @@ type LocalScheduler struct {
 	runningMu   sync.Mutex
 	running     map[string]bool
 	completed   map[string]bool
+	blocked     map[string]bool // waiting on a requirement: expanded once by the backfill walk, re-triggered by that requirement's completion
 	ctx         context.Context // the run's context: cancelled, nothing more starts
 	events      chan<- Event    // nil when nobody listens; see Event
 }
@@ -171,6 +172,7 @@ func (e *LocalScheduler) claim(instanceId string) bool {
 		return false
 	}
 	e.running[instanceId] = true
+	delete(e.blocked, instanceId)
 	return true
 }
 
@@ -198,6 +200,27 @@ func (e *LocalScheduler) isCompleted(instanceId string) bool {
 	e.runningMu.Lock()
 	defer e.runningMu.Unlock()
 	return e.completed[instanceId]
+}
+
+func (e *LocalScheduler) isBlocked(instanceId string) bool {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	return e.blocked[instanceId]
+}
+
+func (e *LocalScheduler) block(instanceId string) {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	if e.blocked == nil {
+		e.blocked = make(map[string]bool)
+	}
+	e.blocked[instanceId] = true
+}
+
+func (e *LocalScheduler) unblock(instanceId string) {
+	e.runningMu.Lock()
+	defer e.runningMu.Unlock()
+	delete(e.blocked, instanceId)
 }
 
 func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
@@ -273,10 +296,18 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		if len(missingDeps) > 0 {
 			//t.SetStatus(workflow.MissingDeps)
 			//e.repository.Upsert(t)
+			// This task now waits on its requirements: their completion
+			// re-triggers it (notifyDownstreams). The walk expands each task
+			// ONCE — a requirement already running, or already waiting on its
+			// own, is left alone. Expanding on every visit walked every path
+			// of the DAG: a 92-task, ten-round harness submitted tens of
+			// thousands of tasks a minute and wrote 7 GB of log in half an
+			// hour (Memdoor, 2026-10-27).
+			e.block(t.InstanceId())
 			if e.backfill {
 				for i := range missingDeps {
-					// A dependency already running here notifies its downstreams when it completes.
-					if !e.isRunning(missingDeps[i].InstanceId()) {
+					dep := missingDeps[i].InstanceId()
+					if !e.isRunning(dep) && !e.isBlocked(dep) {
 						e.Trigger(missingDeps[i])
 					}
 				}
@@ -381,6 +412,7 @@ func (e *LocalScheduler) triggerIfRequired(task workflow.WorkflowExecution) {
 		return
 	}
 	if (e.backfill || task.Status != workflow.Done) && e.allDependenciesCompleted(task.WorkflowName(), task.Partition, task.Version()) {
+		e.unblock(task.InstanceId())
 		e.Trigger(task.WorkflowInstanceId)
 	}
 }
