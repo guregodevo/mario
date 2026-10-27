@@ -155,10 +155,10 @@ func (e *LocalScheduler) fetchOrCreate(name, partition string) *workflow.Executa
 	if !ok {
 		t = e.taskFactory.NewExecutable(name)
 		e.repository.Upsert(t.WorkflowExecution)
-		logger.Log.Warn(fmt.Sprintf("Creating task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
+		logger.Log.Debug(fmt.Sprintf("Creating task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
 	} else {
 		t = e.taskFactory.ExecutableOf(exe)
-		logger.Log.Warn(fmt.Sprintf("Got task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
+		logger.Log.Debug(fmt.Sprintf("Got task id %s name:%s partition:%s --> %s tPartition %s", id, name, partition, t.InstanceId(), t.Partition), "component", "local scheduler")
 	}
 	return t
 }
@@ -233,10 +233,10 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		}
 
 		// Check for dependencies
-		logger.Log.Info(fmt.Sprintf("Checking task '%s' dependencies", t.InstanceId()), "component", "local scheduler")
+		logger.Log.Debug(fmt.Sprintf("Checking task '%s' dependencies", t.InstanceId()), "component", "local scheduler")
 		missingDeps := make([]workflow.WorkflowInstanceId, 0)
 		for depName, _ := range e.repository.Upstreams(t.WorkflowName(), id.Version()) {
-			logger.Log.Info(fmt.Sprintf("Checking %s ...", workflow.InstanceIdOf(depName, id.Partition)), "component", "local scheduler")
+			logger.Log.Debug(fmt.Sprintf("Checking %s ...", workflow.InstanceIdOf(depName, id.Partition)), "component", "local scheduler")
 
 			dep := e.fetchOrCreate(depName, id.Partition)
 			// Done from a PAST run is a record; the target is the proof. A
@@ -262,11 +262,11 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 					e.repository.Upsert(dep.WorkflowExecution)
 					e.emit(Skipped, dep.WorkflowName(), dep.Partition, nil, false)
 				} else {
-					logger.Log.Error(fmt.Sprintf("Missing %s ...", missingdep), "component", "local scheduler")
+					logger.Log.Debug(fmt.Sprintf("Missing %s ...", missingdep), "component", "local scheduler")
 					missingDeps = append(missingDeps, dep.WorkflowInstanceId)
 				}
 			} else {
-				logger.Log.Info(fmt.Sprintf("Found %s ...", dep.InstanceId()), "component", "local scheduler")
+				logger.Log.Debug(fmt.Sprintf("Found %s ...", dep.InstanceId()), "component", "local scheduler")
 			}
 
 		}
@@ -281,7 +281,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 					}
 				}
 			}
-			logger.Log.Error(fmt.Sprintf("Missing %s version %s component %s deps: %v ...", t.InstanceId(), t.Version(), t.Component(), missingDeps), "component", "local scheduler")
+			logger.Log.Debug(fmt.Sprintf("Missing %s version %s component %s deps: %v ...", t.InstanceId(), t.Version(), t.Component(), missingDeps), "component", "local scheduler")
 			return
 		}
 
