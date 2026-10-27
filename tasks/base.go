@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/guregodevo/mario/logger"
+	"os/exec"
 	"strconv"
 	"strings"
 	"text/template"
@@ -101,6 +103,18 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, to)
 			defer cancel()
+		}
+		if strings.TrimSpace(d.When) != "" {
+			line, err := b.Render(d, d.When)
+			if err != nil {
+				return fmt.Errorf("task %s: when template: %w", name, err)
+			}
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", line)
+			cmd.Dir = b.Dir
+			if err := cmd.Run(); err != nil {
+				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, line), "component", "workflow")
+				return b.Outputs.Write(name, b.Partition, "")
+			}
 		}
 		out, err := b.Run(ctx, b, d, name)
 		if err != nil {

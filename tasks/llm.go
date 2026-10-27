@@ -52,7 +52,8 @@ const llmSchema = `{
     "requires": {"$ref": "#/definitions/requires"},
     "target": {"$ref": "#/definitions/target"},
     "timeout": {"type": "string"},
-    "max_retries": {"type": "integer", "minimum": 0}
+    "max_retries": {"type": "integer", "minimum": 0},
+    "when": {"type": "string"}
   },
   "required": ["type", "prompt"],
   "additionalProperties": false,

@@ -59,6 +59,14 @@ type YamlTaskDefinition struct {
 	// from the name alone: a file that must exist, or a command that must
 	// exit 0. A task is done when its target exists, never when its run says so.
 	Target *YamlTarget `yaml:"target,omitempty"`
+	// When is a condition on running at all: a shell line (a template, like
+	// the command) run in the project directory just before the task; when it
+	// exits non-zero the task is skipped as done with an empty answer and
+	// nothing it would have called is called. A DAG has no loop and no
+	// branch; this is how a round after "done" costs nothing (2026-10-27: a
+	// ten-round harness kept calling its model for eight rounds after the
+	// manager had finished, 60% of the bill).
+	When string `yaml:"when,omitempty"`
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
