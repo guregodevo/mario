@@ -29,8 +29,7 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 	if err != nil {
 		return "", fmt.Errorf("task %s: command template: %w", name, err)
 	}
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", line)
-	cmd.Dir = b.Dir
+	cmd := shellCommand(ctx, b.Dir, line, b.Env)
 	// Cancelling must end everything the line started, not only the shell:
 	// a killed sh left its `sleep 60` holding stdout, and Run waited the
 	// full minute for a stopped run (a Memdoor test, 2026-10-04).
@@ -45,6 +44,18 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 		return "", fmt.Errorf("task %s: %s: %w%s", name, line, err, prefixed(msg))
 	}
 	return out.String(), nil
+}
+
+// shellCommand is line run by /bin/sh in dir, with the environment env
+// answers, or this process's when env is nil: every command a task runs (its
+// `command`, its `when`, its command target) is built here.
+func shellCommand(ctx context.Context, dir, line string, env func() []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", line)
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env()
+	}
+	return cmd
 }
 
 func prefixed(msg string) string {

@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/guregodevo/mario/logger"
-	"os/exec"
 	"strconv"
 	"strings"
 	"text/template"
@@ -44,10 +43,15 @@ type Base struct {
 	// another repository's workflow — each project publishes what it
 	// produces as a target, and a consumer checks it there, never runs it).
 	ExternalDirs map[string]string
-	Dir          string  // where targets are checked and commands run
-	Outputs      Outputs // where outputs are kept when no target is named
-	Partition    string
-	Version      string
+	Dir          string // where targets are checked and commands run
+	// Env is the environment a command, a `when` and a command target run
+	// with; nil runs them with this process's. A caller that holds secrets
+	// its tasks must not see (a model key) answers its environment without
+	// them.
+	Env       func() []string
+	Outputs   Outputs // where outputs are kept when no target is named
+	Partition string
+	Version   string
 }
 
 // Bind answers a copy tied to one run: its definitions, directory, outputs,
@@ -109,9 +113,7 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("task %s: when template: %w", name, err)
 			}
-			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", line)
-			cmd.Dir = b.Dir
-			if err := cmd.Run(); err != nil {
+			if err := shellCommand(ctx, b.Dir, line, b.Env).Run(); err != nil {
 				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, line), "component", "workflow")
 				return b.Outputs.Write(name, b.Partition, "")
 			}
@@ -165,7 +167,7 @@ func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
 		if d.Target.File != "" {
 			return FileEndpoint(name, dir, b.renderOr(d, d.Target.File))
 		}
-		return CommandEndpoint(name, dir, b.renderOr(d, d.Target.Command))
+		return CommandEndpointWithEnv(name, dir, b.renderOr(d, d.Target.Command), b.Env)
 	}
 	return b.Outputs.Endpoint(name, b.Partition)
 }

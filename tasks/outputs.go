@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,6 +56,12 @@ func CommandEndpoint(name, dir, command string) workflow.DataEndpoint {
 	return &commandEndpoint{name: name, dir: dir, command: command}
 }
 
+// CommandEndpointWithEnv is CommandEndpoint whose command runs with the
+// environment env answers (Base.Env); nil is this process's.
+func CommandEndpointWithEnv(name, dir, command string, env func() []string) workflow.DataEndpoint {
+	return &commandEndpoint{name: name, dir: dir, command: command, env: env}
+}
+
 type fileEndpoint struct {
 	name string
 	path string
@@ -76,6 +81,7 @@ type commandEndpoint struct {
 	name    string
 	dir     string
 	command string
+	env     func() []string
 }
 
 func (e *commandEndpoint) Name() string { return e.name }
@@ -85,7 +91,5 @@ func (e *commandEndpoint) String() string { return "command: " + e.command }
 func (e *commandEndpoint) Exists() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", e.command)
-	cmd.Dir = e.dir
-	return cmd.Run() == nil
+	return shellCommand(ctx, e.dir, e.command, e.env).Run() == nil
 }
