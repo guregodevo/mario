@@ -19,10 +19,13 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 	for k, v := range taskDef.Args {
 		config[k] = v
 	}
-	// `output` is known at run time only (a task type binds it to the run's
-	// outputs); it is declared here so a walk can parse the field.
+	// `output` and `file` are known at run time only (a task type binds them
+	// to the run's outputs and its directory); they are declared here so a
+	// walk can parse the field.
 	funcs := template.FuncMap{"output": func(name string) (string, error) {
 		return "", fmt.Errorf("output %q is only known when the task runs", name)
+	}, "file": func(path string) (string, error) {
+		return "", fmt.Errorf("file %q is only read when the task runs", path)
 	}}
 	return config, funcs, nil
 }

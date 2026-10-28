@@ -3,6 +3,8 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/guregodevo/mario/templates"
@@ -17,7 +19,8 @@ type Completer interface {
 
 // LLM is the task type that makes one model call — `prompt:` rendered over
 // args and partition, `model:` naming which — and keeps the answer as the
-// output. No tools, no loop: one question, one answer, a proof.
+// output. No tools, no loop: one question, one answer, a proof. With a
+// file target the answer is written to that file.
 //
 //	type: llm
 //	model: fast
@@ -34,7 +37,23 @@ func LLM(c Completer) Base {
 		if strings.TrimSpace(prompt) == "" {
 			return "", fmt.Errorf("task %s: an llm task needs a prompt", name)
 		}
-		return c.Complete(ctx, d.Model, prompt)
+		answer, err := c.Complete(ctx, d.Model, prompt)
+		if err != nil || d.Target == nil || d.Target.File == "" {
+			return answer, err
+		}
+		// A file target is where the answer goes: the call has no tools to
+		// write it, and the file is what the tasks after it read.
+		path := b.renderOr(d, d.Target.File)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(b.Dir, path)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", fmt.Errorf("task %s: %w", name, err)
+		}
+		if err := os.WriteFile(path, []byte(answer+"\n"), 0o644); err != nil {
+			return "", fmt.Errorf("task %s: %w", name, err)
+		}
+		return answer, nil
 	}}
 }
 

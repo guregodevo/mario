@@ -46,3 +46,32 @@ func TestATaskRunsOnlyWhenItsConditionHolds(t *testing.T) {
 		t.Fatalf("the model was called for %v; only the finish should call it", model.calls)
 	}
 }
+
+// A model call reads a file a command before it wrote ({{ file }}), and an
+// llm task with a file target writes its answer there: the call has no tools,
+// and the file is the proof the task after it reads.
+func TestAnLLMTaskReadsAFileAndWritesItsTarget(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"diff":   "type: command\ncommand: mkdir -p runs && printf -- '-a\\n+b\\n' > runs/{{.partition}}.diff\n",
+		"review": "type: llm\nprompt: 'review {{ file (printf \"runs/%s.diff\" .partition) }}'\nrequires:\n  - table_pattern: diff\ntarget:\n  file: runs/{{.partition}}.md\n",
+		"gate":   "type: command\ncommand: grep -q 'review -a' runs/{{.partition}}.md\nrequires:\n  - table_pattern: review\n",
+	})
+	seq := run(t, root, types, defs)
+	if got := strings.Join(seq, " | "); got != "started diff | done diff | started review | done review | started gate | done gate" {
+		t.Fatalf("events = %q", got)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "runs", "2026-10-02.md"))
+	if err != nil || string(data) != "answer to review -a\n+b\n\n" {
+		t.Fatalf("the target holds %q (%v)", data, err)
+	}
+	if len(model.calls) != 1 || !strings.Contains(model.calls[0], "review -a\n+b") {
+		t.Fatalf("the model was asked %q", model.calls)
+	}
+}

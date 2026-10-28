@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/guregodevo/mario/logger"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -229,6 +231,19 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 			return "", fmt.Errorf("output of %s is not there (is it required by this task?): %w", full, err)
 		}
 		return out, nil
+	}
+	// `file "x.diff"` puts a file of the project in the text, as it is when
+	// the task runs: what a command before it wrote, read by a model call
+	// that has no tools to open it.
+	funcs["file"] = func(path string) (string, error) {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(b.Dir, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("file %s: %w", path, err)
+		}
+		return string(data), nil
 	}
 	t, err := template.New(d.Name).Funcs(funcs).Parse(text)
 	if err != nil {
