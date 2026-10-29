@@ -29,7 +29,10 @@ type YamlTaskDefinition struct {
 	ClusteringFields   []string          `yaml:"clustering_fields,omitempty"`
 	Query              string            `yaml:"query,omitempty"`
 	Prompt             string            `yaml:"prompt"`
-	Model              string            `yaml:"model"`
+	// System is an llm task's system message (a template, like Prompt): the
+	// role and the rules, sent apart from the question when the host takes one.
+	System string `yaml:"system,omitempty"`
+	Model  string `yaml:"model"`
 	// Budget is the tokens an agent task may spend running on alone before
 	// it hands back (0: the runner's default).
 	Budget int64 `yaml:"budget,omitempty"`

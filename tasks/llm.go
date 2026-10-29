@@ -17,6 +17,13 @@ type Completer interface {
 	Complete(ctx context.Context, model, prompt string) (string, error)
 }
 
+// SystemCompleter is a Completer that also takes a system message, sent as
+// the request's own system role. A host without it gets the system message
+// ahead of the prompt instead.
+type SystemCompleter interface {
+	CompleteWithSystem(ctx context.Context, model, system, prompt string) (string, error)
+}
+
 // LLM is the task type that makes one model call — `prompt:` rendered over
 // args and partition, `model:` naming which — and keeps the answer as the
 // output. No tools, no loop: one question, one answer, a proof. With a
@@ -37,7 +44,20 @@ func LLM(c Completer) Base {
 		if strings.TrimSpace(prompt) == "" {
 			return "", fmt.Errorf("task %s: an llm task needs a prompt", name)
 		}
-		answer, err := c.Complete(ctx, d.Model, prompt)
+		var answer string
+		if strings.TrimSpace(d.System) == "" {
+			answer, err = c.Complete(ctx, d.Model, prompt)
+		} else {
+			system, serr := b.Render(d, d.System)
+			if serr != nil {
+				return "", fmt.Errorf("task %s: system template: %w", name, serr)
+			}
+			if sc, ok := c.(SystemCompleter); ok {
+				answer, err = sc.CompleteWithSystem(ctx, d.Model, system, prompt)
+			} else {
+				answer, err = c.Complete(ctx, d.Model, system+"\n\n"+prompt)
+			}
+		}
 		if err != nil || d.Target == nil || d.Target.File == "" {
 			return answer, err
 		}
@@ -63,6 +83,7 @@ const llmSchema = `{
   "properties": {
     "type": {"enum": ["llm"]},
     "prompt": {"type": "string", "description": "The question. A Go template over args and partition."},
+    "system": {"type": "string", "description": "The system message: the role and the rules, sent apart from the question when the host takes one. A Go template, like prompt."},
     "model": {"type": "string", "description": "Which model, as the host names them (default: the host's)."},
     "table_description": {"type": "string"},
     "dataset_description": {"type": "string"},
