@@ -202,10 +202,22 @@ func (e *LocalScheduler) isCompleted(instanceId string) bool {
 	return e.completed[instanceId]
 }
 
-func (e *LocalScheduler) isBlocked(instanceId string) bool {
+// expand claims the walk's one trigger of a requirement: true for the first
+// visitor only, which marks it waiting under the same lock as the check. A
+// check and a mark apart let both tasks of a layer trigger the same
+// requirement before its own Start marked it, and each duplicate expanded
+// its requirements again: the test's 24 tasks fetched 1,100 to 4,800 times.
+func (e *LocalScheduler) expand(instanceId string) bool {
 	e.runningMu.Lock()
 	defer e.runningMu.Unlock()
-	return e.blocked[instanceId]
+	if e.running[instanceId] || e.completed[instanceId] || e.blocked[instanceId] {
+		return false
+	}
+	if e.blocked == nil {
+		e.blocked = make(map[string]bool)
+	}
+	e.blocked[instanceId] = true
+	return true
 }
 
 func (e *LocalScheduler) block(instanceId string) {
@@ -306,8 +318,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			e.block(t.InstanceId())
 			if e.backfill {
 				for i := range missingDeps {
-					dep := missingDeps[i].InstanceId()
-					if !e.isRunning(dep) && !e.isBlocked(dep) {
+					if e.expand(missingDeps[i].InstanceId()) {
 						e.Trigger(missingDeps[i])
 					}
 				}
