@@ -146,7 +146,7 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		// {{ output "name" }}. With a target it is not the proof — the target
 		// is — only what the task said. Dropping it failed every downstream
 		// prompt that read a targeted task's answer ("output of … is not
-		// there", a Memdoor run 2026-10-04).
+		// there", a run 2026-10-04).
 		return b.Outputs.Write(name, b.Partition, out)
 	}
 }

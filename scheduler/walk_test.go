@@ -34,7 +34,7 @@ func (f *countingFactory) ExecutableOf(instance workflow.WorkflowExecution) *wor
 // each requiring both of the layer below, has 2^depth paths from its sinks
 // to its roots; a walk that re-expanded a task on every visit walked them
 // all while the roots ran. A 92-task harness of ten rounds submitted tens
-// of thousands of tasks a minute that way (Memdoor, 2026-10-27).
+// of thousands of tasks a minute that way (2026-10-27).
 func TestTheBackfillWalkExpandsEachTaskOnce(t *testing.T) {
 	repo := static.NewWorkflowRepository()
 	version := fmt.Sprintf("walk-%d", time.Now().UnixNano())

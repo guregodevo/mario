@@ -1,7 +1,6 @@
 // Package logger is how the engine logs. Log is an interface in the shape
 // every Go structured logger already has — slog's — so a host program hands
-// the engine its own logger and nothing adapts: Memdoor's pkg/ declares the
-// same four methods and its gateway logger satisfies both.
+// the engine its own logger and nothing adapts.
 package logger
 
 import "log/slog"

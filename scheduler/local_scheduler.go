@@ -302,7 +302,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			// own, is left alone. Expanding on every visit walked every path
 			// of the DAG: a 92-task, ten-round harness submitted tens of
 			// thousands of tasks a minute and wrote 7 GB of log in half an
-			// hour (Memdoor, 2026-10-27).
+			// hour (2026-10-27).
 			e.block(t.InstanceId())
 			if e.backfill {
 				for i := range missingDeps {
@@ -337,7 +337,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 		// Done before (the same partition triggered again: a rerun, a
 		// resume) counts too: the target is the proof either way. Skipping
 		// only what was not yet Done re-ran a finished sink on every
-		// trigger (a Memdoor rerun, 2026-10-04: a one-step workflow rewrote
+		// trigger (a rerun, 2026-10-04: a one-step workflow rewrote
 		// its file on each run of the same partition).
 		if t.Target().Exists() {
 			if t.GetStatus() != workflow.Done {
@@ -376,7 +376,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			// retrying it re-triggered its requirements through the backfill,
 			// which failed on the same cancelled context and were retried in
 			// turn, a loop that kept a stopped run "stopping" and flooded the
-			// queues (Memdoor, 2026-10-26: two stopped runs submitted 140
+			// queues (2026-10-26: two stopped runs submitted 140
 			// tasks a minute under a live one).
 			if willRetry {
 				e.retry(t.WorkflowInstanceId)
@@ -468,7 +468,7 @@ func (e *LocalScheduler) retryLoop() {
 
 func (e *LocalScheduler) WaitForCompletion() error {
 	// Say the count when it changes, not ten times a second: a host that
-	// keeps the engine's log (Memdoor does) got 2,500 identical lines from
+	// keeps the engine's log got 2,500 identical lines from
 	// one four-minute task.
 	last := int32(-1)
 	for n := atomic.LoadInt32(&e.counter); n > 0; n = atomic.LoadInt32(&e.counter) {

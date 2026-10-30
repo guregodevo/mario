@@ -43,7 +43,7 @@ func (f *sleepyFactory) ExecutableOf(instance workflow.WorkflowExecution) *workf
 // WaitForCompletion returns. It used to retry the cancelled task, whose Start
 // re-triggered its requirements through the backfill, which failed on the same
 // cancelled context and were retried in turn: a stopped run that never ended
-// and submitted tasks by the hundred a minute (Memdoor, 2026-10-26).
+// and submitted tasks by the hundred a minute (2026-10-26).
 func TestACancelledRunEndsWithoutRetrying(t *testing.T) {
 	repo := static.NewWorkflowRepository()
 	version := fmt.Sprintf("cancel-%d", time.Now().UnixNano())

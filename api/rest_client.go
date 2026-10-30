@@ -49,8 +49,8 @@ func (r *RESTWorkflowRepository) WithToken(token string) *RESTWorkflowRepository
 	return r
 }
 
-// seg is a name, id, version or target as one path segment: a task is
-// named <group>/<task> in Memdoor, and a bare slash in the path is a route,
+// seg is a name, id, version or target as one path segment: a task may be
+// named <group>/<task>, and a bare slash in the path is a route,
 // not a name (found 2026-10-05: Fetch of kpis/leader answered 404 while its
 // Upsert, a body, succeeded).
 func seg(v string) string { return url.PathEscape(v) }

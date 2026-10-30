@@ -424,7 +424,7 @@ func (r *SqliteWorkflowRepository) Executions(id string) map[string]workflow.Wor
 // path, exactly as given. NewWorkflowRepository keeps the historical
 // behaviour of resolving a bare name to ./<name>.db in the working
 // directory; a host that keeps its state somewhere of its choosing (a
-// project's .memdoor/, a data directory) names the file itself.
+// project directory, a data directory) names the file itself.
 func NewWorkflowRepositoryAt(dbFile string, builderFunc workflow.GetBuilderFunc) *SqliteWorkflowRepository {
 	return open(dbFile, builderFunc)
 }

@@ -52,7 +52,7 @@ func TestSQLiteWorkflowRepositorySurvivesAReopen(t *testing.T) {
 			WorkflowId: workflow.WorkflowId{
 				DName:       "release",
 				DVersion:    "release@2026-10-03T090000",
-				DComponent:  "memdoor",
+				DComponent:  "host",
 				DMaxRetries: 3,
 			},
 			Partition: "2026-10-03T090000",
@@ -115,7 +115,7 @@ func TestSQLiteWorkflowRepositoryListsRuns(t *testing.T) {
 				// What a real run writes: the TASK's full name, the workflow
 				// only in the version (a fixture with the workflow's name
 				// hid a query that found no real run, 2026-10-03).
-				WorkflowId: workflow.WorkflowId{DName: name + ".steps." + task, DVersion: name + "@" + partition, DComponent: "memdoor"},
+				WorkflowId: workflow.WorkflowId{DName: name + ".steps." + task, DVersion: name + "@" + partition, DComponent: "host"},
 				Partition:  partition,
 			},
 			StartDate: start,
@@ -197,7 +197,7 @@ func TestSQLiteWorkflowRepositoryUnderConcurrentUse(t *testing.T) {
 		return workflow.WorkflowExecution{
 			ExecutionId: fmt.Sprintf("tests-%s", partition),
 			WorkflowInstanceId: workflow.WorkflowInstanceId{
-				WorkflowId: workflow.WorkflowId{DName: name, DVersion: name + "@" + partition, DComponent: "memdoor"},
+				WorkflowId: workflow.WorkflowId{DName: name, DVersion: name + "@" + partition, DComponent: "host"},
 				Partition:  partition,
 			},
 			StartDate: time.Now(),

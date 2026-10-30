@@ -32,7 +32,7 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 	cmd := shellCommand(ctx, b.Dir, line, b.Env)
 	// Cancelling must end everything the line started, not only the shell:
 	// a killed sh left its `sleep 60` holding stdout, and Run waited the
-	// full minute for a stopped run (a Memdoor test, 2026-10-04).
+	// full minute for a stopped run (a test, 2026-10-04).
 	killGroupOnCancel(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
