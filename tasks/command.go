@@ -41,21 +41,43 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
-		return "", fmt.Errorf("task %s: %s: %w%s", name, line, err, prefixed(msg))
+		return "", fmt.Errorf("task %s: %s: %w%s", name, shown(line), err, prefixed(msg))
 	}
 	return out.String(), nil
 }
 
+// maxArgLine is the longest line passed to /bin/sh as its -c argument. Linux
+// caps one argument at 131072 bytes (MAX_ARG_STRLEN) and fork/exec fails past
+// it with "argument list too long", before the shell starts.
+const maxArgLine = 100_000
+
 // shellCommand is line run by /bin/sh in dir, with the environment env
 // answers, or this process's when env is nil: every command a task runs (its
-// `command`, its `when`, its command target) is built here.
+// `command`, its `when`, its command target) is built here. A line over
+// maxArgLine goes to `sh -s` on stdin instead; a command in it that reads
+// stdin reads the rest of the line.
 func shellCommand(ctx context.Context, dir, line string, env func() []string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", line)
+	var cmd *exec.Cmd
+	if len(line) > maxArgLine {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-s")
+		cmd.Stdin = strings.NewReader(line)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", line)
+	}
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = env()
 	}
 	return cmd
+}
+
+// shown is line as a message names it: the first 200 bytes, then its length.
+func shown(line string) string {
+	const max = 200
+	if len(line) <= max {
+		return line
+	}
+	return fmt.Sprintf("%s… (%d bytes)", strings.ToValidUTF8(line[:max], ""), len(line))
 }
 
 func prefixed(msg string) string {

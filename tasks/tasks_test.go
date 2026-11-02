@@ -2,11 +2,13 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/guregodevo/mario/engine"
 	"github.com/guregodevo/mario/factory"
@@ -401,5 +403,59 @@ func TestOutputsRoundTrip(t *testing.T) {
 	}
 	if o.Endpoint("w.g.other", "p").Exists() {
 		t.Fatal("another task's output is not there")
+	}
+}
+
+// A rendered line over the kernel's one-argument cap (128 KB on Linux) runs:
+// the whole line reaches the shell, and a failure names a short form of it.
+func TestALineOverTheArgumentCapRuns(t *testing.T) {
+	root := t.TempDir()
+	b := Command().Bind(map[string]*templates.YamlTaskDefinition{}, root, Outputs{Dir: filepath.Join(root, "out")}, "p", "v")
+	big := strings.Repeat("0123456789abcdef", 16*1024) // 256 KB
+	d := &templates.YamlTaskDefinition{Command: "cat > answer.md <<'EOF'\n" + big + "\nEOF\nwc -c < answer.md"}
+	d.Name = "w.steps.write"
+	out, err := runCommand(context.Background(), b, d, d.Name)
+	if err != nil {
+		t.Fatalf("a %d-byte line must run: %v", len(d.Command), err)
+	}
+	if got := strings.TrimSpace(out); got != fmt.Sprint(len(big)+1) {
+		t.Fatalf("the shell got %s bytes of the heredoc, want %d", got, len(big)+1)
+	}
+
+	d.Command = ": " + big[:150000] + "; exit 3"
+	_, err = runCommand(context.Background(), b, d, d.Name)
+	if err == nil || len(err.Error()) > 600 || !strings.Contains(err.Error(), "bytes)") {
+		t.Fatalf("a failed long line is named short: %v", err)
+	}
+}
+
+// A line under the cap stays on the command line (`sh -c`, stdin left alone).
+// One over it goes to `sh -s` on stdin, so it never rides in an argument.
+func TestOnlyALineOverTheCapGoesOnStdin(t *testing.T) {
+	cmd := shellCommand(context.Background(), t.TempDir(), "echo hi", nil)
+	if got := strings.Join(cmd.Args, " "); got != "/bin/sh -c echo hi" || cmd.Stdin != nil {
+		t.Fatalf("short line: args = %q stdin = %v", got, cmd.Stdin)
+	}
+	cmd = shellCommand(context.Background(), t.TempDir(), strings.Repeat("x", maxArgLine+1), nil)
+	if got := strings.Join(cmd.Args, " "); got != "/bin/sh -s" || cmd.Stdin == nil {
+		t.Fatalf("long line: args = %d bytes %q stdin = %v", len(got), got[:min(len(got), 20)], cmd.Stdin)
+	}
+}
+
+// A `when:` line over the cap runs too.
+func TestAWhenLineOverTheArgumentCapRuns(t *testing.T) {
+	big := strings.Repeat("x", 200000)
+	if err := shellCommand(context.Background(), t.TempDir(), "test -n '"+big+"'", nil).Run(); err != nil {
+		t.Fatalf("a long when line must run: %v", err)
+	}
+}
+
+func TestShownCutsAtARuneBoundary(t *testing.T) {
+	if got := shown("short"); got != "short" {
+		t.Fatalf("a short line is shown whole: %q", got)
+	}
+	got := shown(strings.Repeat("é", 300)) // 600 bytes, 2 per rune
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, "(600 bytes)") {
+		t.Fatalf("cut line = %q", got)
 	}
 }

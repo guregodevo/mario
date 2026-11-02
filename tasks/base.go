@@ -116,7 +116,7 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 				return fmt.Errorf("task %s: when template: %w", name, err)
 			}
 			if err := shellCommand(ctx, b.Dir, line, b.Env).Run(); err != nil {
-				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, line), "component", "workflow")
+				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, shown(line)), "component", "workflow")
 				return b.Outputs.Write(name, b.Partition, "")
 			}
 		}
