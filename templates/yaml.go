@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/xeipuuv/gojsonschema"
@@ -70,6 +71,13 @@ type YamlTaskDefinition struct {
 	// ten-round harness kept calling its model for eight rounds after the
 	// manager had finished, 60% of the bill).
 	When string `yaml:"when,omitempty"`
+	// Each makes one file several tasks, opt-in: a task with `each: [a, b]`
+	// is the same task twice, named <name>-a and <name>-b, with {{.item}} in
+	// its templates (prompt, command, when, target). Without it nothing
+	// changes. It is read before the type's schema, so no type has to list it.
+	Each []string `yaml:"each,omitempty"`
+	// Item is the one entry of Each this copy was made for.
+	Item string `yaml:"-"`
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
@@ -172,9 +180,74 @@ func YamlSerialize(task *YamlTaskDefinition) ([]byte, error) {
 	return yamlContent, nil
 }
 
+// itemName is what an `each` entry may be: it ends up in a task's name.
+var itemName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// withoutEach returns the YAML without its top-level `each` key (for the
+// type's schema, which does not list it) and the entries, checked.
+func withoutEach(yamlContent []byte) ([]byte, []string, error) {
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(yamlContent, &doc); err != nil || doc == nil {
+		return yamlContent, nil, nil // not a mapping: the validator reports it
+	}
+	raw, ok := doc["each"]
+	if !ok {
+		return yamlContent, nil, nil
+	}
+	list, ok := raw.([]interface{})
+	if !ok || len(list) == 0 {
+		return nil, nil, fmt.Errorf("each: a list of names, e.g. each: [a, b]")
+	}
+	seen := map[string]bool{}
+	items := make([]string, 0, len(list))
+	for _, v := range list {
+		item := fmt.Sprint(v)
+		if !itemName.MatchString(item) {
+			return nil, nil, fmt.Errorf("each: %q is not a name (letters, digits, - _ . only)", item)
+		}
+		if seen[item] {
+			return nil, nil, fmt.Errorf("each: %q twice", item)
+		}
+		seen[item] = true
+		items = append(items, item)
+	}
+	delete(doc, "each")
+	rest, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rest, items, nil
+}
+
+// Expand returns the task as it is, or, with Each, one copy per entry: Item
+// and the arg `item` set. The copies share nothing with the original.
+func (d *YamlTaskDefinition) Expand() []*YamlTaskDefinition {
+	if len(d.Each) == 0 {
+		return []*YamlTaskDefinition{d}
+	}
+	out := make([]*YamlTaskDefinition, 0, len(d.Each))
+	for _, item := range d.Each {
+		c := *d
+		c.Each = nil
+		c.Item = item
+		c.Args = make(map[string]string, len(d.Args)+1)
+		for k, v := range d.Args {
+			c.Args[k] = v
+		}
+		c.Args["item"] = item
+		c.Requires = append([]Requires(nil), d.Requires...)
+		out = append(out, &c)
+	}
+	return out
+}
+
 func YamlParse(validator *YAMLValidator, yamlContent []byte) (error, *YamlTaskDefinition) {
 
-	err, _ := validator.ValidateYAML(yamlContent)
+	forSchema, _, errEach := withoutEach(yamlContent)
+	if errEach != nil {
+		return errEach, nil
+	}
+	err, _ := validator.ValidateYAML(forSchema)
 
 	if err != nil {
 		return err, nil

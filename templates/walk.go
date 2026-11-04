@@ -3,6 +3,7 @@ package templates
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/guregodevo/mario/fileio"
@@ -92,7 +93,15 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 				return fmt.Errorf("%s: %w", rel, err)
 			} else if yamlDef != nil {
 				yamlDef.Partition = partition
-				taskDefs[path] = yamlDef
+				// One file, several tasks with `each`: the key keeps the
+				// real path, then "#" and the entry.
+				if len(yamlDef.Each) == 0 {
+					taskDefs[path] = yamlDef
+				} else {
+					for _, c := range yamlDef.Expand() {
+						taskDefs[path+"#"+c.Item] = c
+					}
+				}
 			}
 		}
 		return nil
@@ -110,9 +119,16 @@ func Walk(ioFileIO fileio.FileIO, fn FuncMap, validator *YAMLValidator, taskPath
 	for taskPath, taskDef := range taskDefs {
 		tmpl := template.New("main")
 
-		projectID, datasetID, tableName, errF := ioFileIO.ExtractInfo(taskPath)
+		infoPath := taskPath
+		if taskDef.Item != "" {
+			infoPath = strings.TrimSuffix(taskPath, "#"+taskDef.Item)
+		}
+		projectID, datasetID, tableName, errF := ioFileIO.ExtractInfo(infoPath)
 		if errF != nil {
 			return fmt.Errorf("Unexpected task path format %s (expected projectID.datasetID.Name) : %v", taskPath, errF), nil
+		}
+		if taskDef.Item != "" {
+			tableName += "-" + taskDef.Item
 		}
 		taskDef.Name = fmt.Sprintf("%s.%s.%s", projectID, datasetID, tableName)
 		for i, dep := range taskDef.Requires {
