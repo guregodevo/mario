@@ -41,7 +41,10 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
-		return "", fmt.Errorf("task %s: %s: %w%s", name, shown(line), err, prefixed(msg))
+		// The status and what the command printed, not the command: it is
+		// in the step's file, and a window that showed it, cut short, read
+		// as if the workflow's files were missing (memdoor #128).
+		return "", fmt.Errorf("task %s: %w%s", name, err, prefixed(msg))
 	}
 	return out.String(), nil
 }
