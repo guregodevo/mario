@@ -424,8 +424,26 @@ func TestALineOverTheArgumentCapRuns(t *testing.T) {
 
 	d.Command = ": " + big[:150000] + "; exit 3"
 	_, err = runCommand(context.Background(), b, d, d.Name)
-	if err == nil || len(err.Error()) > 600 || !strings.Contains(err.Error(), "bytes)") {
-		t.Fatalf("a failed long line is named short: %v", err)
+	if err == nil || len(err.Error()) > 600 || !strings.Contains(err.Error(), "exit status 3") {
+		t.Fatalf("a failed long line's error is short: %v", err)
+	}
+}
+
+// A failed command's error is the task, the exit status and what the
+// command printed, never the command itself: it is in the step's file, and
+// shown in a window, cut short, it read as the reason (memdoor #128).
+func TestAFailedCommandsErrorIsItsStatusAndOutput(t *testing.T) {
+	root := t.TempDir()
+	b := Command().Bind(map[string]*templates.YamlTaskDefinition{}, root, Outputs{Dir: filepath.Join(root, "out")}, "p", "v")
+	d := &templates.YamlTaskDefinition{Command: "set -e\nr=.memdoor/runs/x\necho 'no prompt: run it with a task' >&2\nexit 1"}
+	d.Name = "team-solve.steps.problem"
+	_, err := runCommand(context.Background(), b, d, d.Name)
+	if err == nil {
+		t.Fatal("exit 1 is an error")
+	}
+	want := "task team-solve.steps.problem: exit status 1 — no prompt: run it with a task"
+	if got := err.Error(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
