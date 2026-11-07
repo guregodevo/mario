@@ -266,3 +266,16 @@ func TestAnIsolatedTasksTargetIsCheckedInItsCopyNotTheRunsDirectory(t *testing.T
 		t.Fatalf("attempts that make their target in their copy: %q", got)
 	}
 }
+
+// The decision model cannot overrule a settled `between`: asked nothing, it
+// runs no more attempts.
+func TestTheDeciderCannotRunMoreThanBetweenSettled(t *testing.T) {
+	dec := &seqDecider{ps: []float64{0.1, 0.1, 0.1}}
+	root, _, _ := runShaped(t, &copyIsolator{}, dec, map[string]string{
+		"try": "type: command\nfanout:\n  min: 2\n  max: 5\n  between: 'true'\n  until: The attempts agree.\ncommand: echo attempt {{.n}} > f.txt\n",
+	})
+	r := readFanout(t, root)
+	if len(r.Attempts) != 2 || !r.Settled || r.By != "between" || len(dec.states) != 0 {
+		t.Fatalf("result = %+v, decider asked %d times", r, len(dec.states))
+	}
+}

@@ -115,8 +115,9 @@ type fanoutAttempt struct {
 // fanout runs Min isolated attempts at once, then one more at a time until
 // the attempts are settled or Max is reached. Settled: `between`, a command
 // run in the run's directory after each wave with every attempt's patch
-// saved, exits 0; or, with `until` and a decision model on the host, the
-// model reads what `between` printed and answers at or above the threshold.
+// saved, exits 0; or, when it does not, with `until` and a decision model on
+// the host, the model reads what `between` printed and answers at or above
+// the threshold. The model can only settle sooner, never run more.
 // Without `between` the fan-out is fixed at Min. Each attempt's patch is
 // written to `save` ({{.n}} in it) when one is named, else kept in the output.
 func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name string) (string, error) {
@@ -242,7 +243,15 @@ func (b *Base) settled(ctx context.Context, d *templates.YamlTaskDefinition, nam
 	if len(printed) > maxBetween {
 		printed = "[…]\n" + printed[len(printed)-maxBetween:]
 	}
-	byExit := runErr == nil
+	// One way only: what `between` settles is settled. The decision model is
+	// asked only when it says not, and can stop the fan-out early, never run
+	// it longer than the command would (on the sample it read a matrix with
+	// no check against `until`, answered 0.18 and ran five attempts where the
+	// command had settled at three, 2026-11-07).
+	if runErr == nil {
+		return true, "between", nil, printed, nil
+	}
+	byExit := false
 	if strings.TrimSpace(f.Until) != "" && b.Decider != nil {
 		until, rerr := b.Render(d, f.Until)
 		if rerr == nil {
