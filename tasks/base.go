@@ -79,17 +79,31 @@ func (b *Base) NewWorkflow(name, version, partition, component string) (workflow
 	if defined {
 		retries = d.MaxRetries
 	}
-	return b.builder().SetWorkflow(name, retries, !defined, version, component).SetRuntime(partition, workflow.Scheduled, 0).OfInstance(), nil
+	id := b.builder().SetWorkflow(name, retries, !defined, version, component).SetRuntime(partition, workflow.Scheduled, 0).OfInstance()
+	id.DOptional = b.optional(name)
+	return id, nil
 }
 
 func (b *Base) NewExecutable(name string) *workflow.ExecutableWorkflowInstance {
 	id, _ := b.NewWorkflow(name, b.Version, b.Partition, "")
-	return b.builder().SetWorkflow(name, id.DMaxRetries, id.DExternal, b.Version, id.DComponent).
+	exe := b.builder().SetWorkflow(name, id.DMaxRetries, id.DExternal, b.Version, id.DComponent).
 		SetRuntime(b.Partition, workflow.Scheduled, 0).SetConcrete(b.NewDataEndpoint(name), b.Fn(name)).Instance().ToExecutable()
+	exe.DOptional = id.DOptional
+	return exe
 }
 
 func (b *Base) ExecutableOf(exe workflow.WorkflowExecution) *workflow.ExecutableWorkflowInstance {
-	return b.builder().SetExecution(exe).SetConcrete(b.NewDataEndpoint(exe.WorkflowName()), b.Fn(exe.WorkflowName())).Instance().ToExecutable()
+	out := b.builder().SetExecution(exe).SetConcrete(b.NewDataEndpoint(exe.WorkflowName()), b.Fn(exe.WorkflowName())).Instance().ToExecutable()
+	// From the definition, not the record: a repository that stores the id's
+	// columns one by one does not keep it.
+	out.DOptional = b.optional(exe.WorkflowName())
+	return out
+}
+
+// optional reads the flag off the definition; an external is never optional.
+func (b *Base) optional(name string) bool {
+	d, defined := b.Defs[name]
+	return defined && d.Optional
 }
 
 // Fn is the task's run: Run under the definition's timeout, then the proof —
@@ -124,6 +138,15 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		if err != nil {
 			// Its own clock ran out: say so, not the kill's "signal: killed".
 			if d.Timeout != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// The target is the proof, the clock is not: a turn stopped
+				// at its timeout with its target there did the work (an
+				// agent that had changed the tree and kept polishing it
+				// ended 13 runs of 500 unchecked, 2026-11-06).
+				if HasTarget(d) && b.NewDataEndpoint(name).Exists() {
+					note := fmt.Sprintf("timed out after %s (its timeout); its target is there", d.Timeout)
+					logger.Log.Info(fmt.Sprintf("Task %s %s", name, note), "component", "workflow")
+					return b.Outputs.Write(name, b.Partition, note)
+				}
 				return fmt.Errorf("task %s timed out after %s (its timeout) and was stopped", name, d.Timeout)
 			}
 			return err
@@ -227,6 +250,11 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 			// is its proof: say that instead of failing the prompt.
 			if d, ok := b.Defs[full]; ok && HasTarget(d) && b.NewDataEndpoint(full).Exists() {
 				return "(" + name + " was already done: " + DescribeTarget(d) + " holds; its answer was not kept)", nil
+			}
+			// An optional task that was passed over answered nothing: the
+			// prompt reads an empty string, not an error.
+			if d, ok := b.Defs[full]; ok && d.Optional {
+				return "", nil
 			}
 			return "", fmt.Errorf("output of %s is not there (is it required by this task?): %w", full, err)
 		}

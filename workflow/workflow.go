@@ -35,6 +35,10 @@ type WorkflowId struct {
 	DComponent  string `json:"component"`
 	DMaxRetries int32  `json:"max_retries"`
 	DExternal   bool   `json:"external"`
+	// DOptional: failed past its retries, the task is passed over and what
+	// requires it runs. Set by the factory from the definition on every
+	// build, never read from a stored record.
+	DOptional bool `json:"optional,omitempty"`
 }
 
 type WorkflowInstanceId struct {
