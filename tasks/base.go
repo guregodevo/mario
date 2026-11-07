@@ -187,7 +187,7 @@ func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name s
 			// at its timeout with its target there did the work (an
 			// agent that had changed the tree and kept polishing it
 			// ended 13 runs of 500 unchecked, 2026-11-06).
-			if HasTarget(d) && b.NewDataEndpoint(name).Exists() {
+			if HasTarget(d) && b.targetEndpoint(name).Exists() {
 				note := fmt.Sprintf("timed out after %s (its timeout); its target is there", d.Timeout)
 				logger.Log.Info(fmt.Sprintf("Task %s %s", name, note), "component", "workflow")
 				return note, nil
@@ -199,7 +199,7 @@ func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name s
 	if HasTarget(d) {
 		// The target is the proof: a run that returned without error but
 		// left no target behind did not do the work.
-		if ep := b.NewDataEndpoint(name); !ep.Exists() {
+		if ep := b.targetEndpoint(name); !ep.Exists() {
 			// Name the target as it was checked, rendered: a failure
 			// that printed the template ("file rules/{{.partition}}.md")
 			// sent a person looking for a file by that name (2026-10-07).
@@ -215,7 +215,20 @@ func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name s
 
 // NewDataEndpoint is the task's proof: the target its definition names, or
 // its output by convention — also for an external, whose maker writes there.
+// An isolated task's or a fan-out's proof is its output: its target is about
+// the copy it ran in (checked there, by once), and in the run's directory it
+// may hold before the task ever ran (an "uncommitted change" target holds in
+// any dirty tree), which would skip it.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
+	if d, known := b.Defs[name]; known && (d.Isolate || d.Fanout != nil) {
+		return b.Outputs.Endpoint(name, b.Partition)
+	}
+	return b.targetEndpoint(name)
+}
+
+// targetEndpoint is the target the definition names, checked in b.Dir, or
+// its output when it names none.
+func (b *Base) targetEndpoint(name string) workflow.DataEndpoint {
 	d, known := b.Defs[name]
 	dir := b.Dir
 	if !known {

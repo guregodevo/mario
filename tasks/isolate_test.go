@@ -231,3 +231,38 @@ func TestAFanoutsShapeIsChecked(t *testing.T) {
 		}
 	}
 }
+
+// An isolated task's target is about its own copy: one that already holds
+// in the run's directory (an "uncommitted change" in a dirty tree) neither
+// skips it nor proves it; it runs, and its target is checked where it ran.
+func TestAnIsolatedTasksTargetIsCheckedInItsCopyNotTheRunsDirectory(t *testing.T) {
+	iso := &copyIsolator{}
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "f.txt"), []byte("start\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "done.txt"), []byte("in the run's directory already\n"), 0o644)
+	cmd := Command()
+	cmd.Isolator = iso
+	types := []Base{cmd}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"try": "type: command\nfanout:\n  min: 2\ncommand: echo attempt {{.n}} > f.txt\ntarget:\n  file: done.txt\n",
+	})
+	seq := run(t, root, types, defs)
+	joined := strings.Join(seq, " | ")
+	if strings.Contains(joined, "skipped") || !strings.Contains(joined, "failed try") {
+		t.Fatalf("the copy has no done.txt: every attempt fails its target, the task is not skipped: %q", joined)
+	}
+	// The same, with attempts that make their target in their copy: done.
+	root2 := t.TempDir()
+	os.WriteFile(filepath.Join(root2, "f.txt"), []byte("start\n"), 0o644)
+	os.WriteFile(filepath.Join(root2, "done.txt"), []byte("in the run's directory already\n"), 0o644)
+	defs2 := writeDAG(t, root2, reg, map[string]string{
+		"try": "type: command\nfanout:\n  min: 2\ncommand: echo attempt {{.n}} > f.txt && echo ok > done.txt\ntarget:\n  file: done.txt\n",
+	})
+	if got := strings.Join(run(t, root2, types, defs2), " | "); got != "started try | done try" {
+		t.Fatalf("attempts that make their target in their copy: %q", got)
+	}
+}
