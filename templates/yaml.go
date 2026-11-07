@@ -65,6 +65,15 @@ type YamlTaskDefinition struct {
 	// Command is what a command task runs (a shell line, a Go template over
 	// args and partition like the prompt).
 	Command string `yaml:"command,omitempty"`
+	// Condition, State, Threshold and Else are a decision task's: the
+	// statement a decision model scores, the evidence it scores it on (a
+	// template over outputs and files), the probability at or above which
+	// the task passes, and the shell line whose exit status answers instead
+	// when no decision model does (tasks.Decision).
+	Condition string  `yaml:"condition,omitempty"`
+	State     string  `yaml:"state,omitempty"`
+	Threshold float64 `yaml:"threshold,omitempty"`
+	Else      string  `yaml:"else,omitempty"`
 	// Target says what proves the task done, when the factory cannot tell
 	// from the name alone: a file that must exist, or a command that must
 	// exit 0. A task is done when its target exists, never when its run says so.
