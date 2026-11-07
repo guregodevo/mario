@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/xeipuuv/gojsonschema"
 	yaml "gopkg.in/yaml.v2"
@@ -19,6 +20,20 @@ type RuntimeContext struct {
 	Name      string
 	Partition string
 }
+
+// YamlFanout is a task's fan-out: how many isolated attempts, and what
+// settles them.
+type YamlFanout struct {
+	Min     int    `yaml:"min"`
+	Max     int    `yaml:"max,omitempty"`
+	Between string `yaml:"between,omitempty"`
+	Until   string `yaml:"until,omitempty"`
+	Save    string `yaml:"save,omitempty"`
+}
+
+// MaxFanout bounds a fan-out: attempts are model turns, and a typo in max
+// must not run a hundred of them.
+const MaxFanout = 10
 
 // A struct to hold the YAML content, based on your YAML structure.
 type YamlTaskDefinition struct {
@@ -93,6 +108,17 @@ type YamlTaskDefinition struct {
 	Each []string `yaml:"each,omitempty"`
 	// Item is the one entry of Each this copy was made for.
 	Item string `yaml:"-"`
+	// Isolate runs the task in a working directory of its own, a copy of the
+	// run's that the host makes (a git worktree, a container): its output is
+	// the change it made there, as a patch, and the run's directory is left
+	// as it was. It needs a host that isolates (tasks.Isolator).
+	Isolate bool `yaml:"isolate,omitempty"`
+	// Fanout runs the task several times, each isolated: Min attempts at
+	// once, then one more at a time until Between says the attempts are
+	// settled (its exit status, or the host's decision model reading what it
+	// printed against Until), or Max is reached. Save is where each attempt's
+	// patch is written ({{.n}}, the attempt's number, and the partition in it).
+	Fanout *YamlFanout `yaml:"fanout,omitempty"`
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
@@ -258,9 +284,13 @@ func (d *YamlTaskDefinition) Expand() []*YamlTaskDefinition {
 
 func YamlParse(validator *YAMLValidator, yamlContent []byte) (error, *YamlTaskDefinition) {
 
-	forSchema, _, errEach := withoutEach(yamlContent)
+	forSchema, items, errEach := withoutEach(yamlContent)
 	if errEach != nil {
 		return errEach, nil
+	}
+	forSchema, errRun := withoutRunShape(forSchema, len(items) > 0)
+	if errRun != nil {
+		return errRun, nil
 	}
 	err, _ := validator.ValidateYAML(forSchema)
 
@@ -336,4 +366,65 @@ func (v *YAMLValidator) validateSchema(taskType string, documentLoader gojsonsch
 		return errors.New(errorFmt)
 	}
 	return nil
+}
+
+// withoutRunShape returns the YAML without its `isolate` and `fanout` keys
+// (how a task is run, read by every type, listed by none of their schemas),
+// with the fan-out checked: a fan-out is isolated, bounded, and not an each.
+func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(yamlContent, &doc); err != nil || doc == nil {
+		return yamlContent, nil
+	}
+	_, isolated := doc["isolate"]
+	raw, fanned := doc["fanout"]
+	if !isolated && !fanned {
+		return yamlContent, nil
+	}
+	if v, ok := doc["isolate"]; ok {
+		if _, isBool := v.(bool); !isBool {
+			return nil, fmt.Errorf("isolate: true or false")
+		}
+	}
+	if fanned {
+		if hasEach {
+			return nil, fmt.Errorf("fanout and each: one or the other (each names its copies, fanout counts them)")
+		}
+		m := map[string]interface{}{}
+		switch raw := raw.(type) {
+		case map[string]interface{}:
+			m = raw
+		case map[interface{}]interface{}:
+			for k, v := range raw {
+				m[fmt.Sprint(k)] = v
+			}
+		default:
+			return nil, fmt.Errorf("fanout: an object with min, and max, between, until, save")
+		}
+		for k := range m {
+			switch k {
+			case "min", "max", "between", "until", "save":
+			default:
+				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, save)", k)
+			}
+		}
+		min, okMin := m["min"].(int)
+		if !okMin || min < 1 || min > MaxFanout {
+			return nil, fmt.Errorf("fanout: min is a number from 1 to %d", MaxFanout)
+		}
+		if v, has := m["max"]; has {
+			max, okMax := v.(int)
+			if !okMax || max < min || max > MaxFanout {
+				return nil, fmt.Errorf("fanout: max is a number from min to %d", MaxFanout)
+			}
+		}
+		if until, has := m["until"]; has && fmt.Sprint(until) != "" {
+			if b, _ := m["between"].(string); strings.TrimSpace(b) == "" {
+				return nil, fmt.Errorf("fanout: until needs between, the command whose output it is judged on")
+			}
+		}
+	}
+	delete(doc, "isolate")
+	delete(doc, "fanout")
+	return yaml.Marshal(doc)
 }
