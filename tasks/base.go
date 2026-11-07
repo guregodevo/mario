@@ -127,7 +127,16 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("task %s: when template: %w", name, err)
 			}
-			if err := shellCommand(ctx, b.Dir, line, b.Env).Run(); err != nil {
+			// The condition runs under the task's clock, as it always has.
+			wctx := ctx
+			if d.Timeout != "" {
+				if to, err := ParseTimeout(d.Timeout); err == nil {
+					var cancel context.CancelFunc
+					wctx, cancel = context.WithTimeout(ctx, to)
+					defer cancel()
+				}
+			}
+			if err := shellCommand(wctx, b.Dir, line, b.Env).Run(); err != nil {
 				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, shown(line)), "component", "workflow")
 				return b.Outputs.Write(name, b.Partition, "")
 			}
