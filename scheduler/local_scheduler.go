@@ -285,7 +285,7 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			// because its own target failed, but trusted its stale upstream
 			// grade on its Done record; a result was filed from stale input.
 			stale := dep.Status == workflow.Done && !dep.IsExternal() && !e.isCompleted(dep.InstanceId()) && !dep.Target().Exists()
-			if dep.Status != workflow.Done || stale {
+			if !e.settled(dep) || stale {
 				missingdep := fmt.Errorf(" %s Job Status %d", dep.Target().Name(), dep.GetStatus())
 				// An EXTERNAL requirement is settled here by its target: nobody
 				// runs it. A requirement of this DAG is not — it is triggered, and
@@ -391,6 +391,11 @@ func (e *LocalScheduler) Start(taskId workflow.WorkflowInstanceId) {
 			// tasks a minute under a live one).
 			if willRetry {
 				e.retry(t.WorkflowInstanceId)
+			} else if t.DOptional && e.ctx.Err() == nil {
+				// Passed over: what requires it goes on without it.
+				e.complete(instanceId)
+				logger.Log.Info(fmt.Sprintf("Passed over %s: optional, failed past its retries", instanceId), "component", "local scheduler")
+				e.notifyDownstreams(t.WorkflowName(), t.Partition, t.Version())
 			}
 		} else {
 			t.SetStatus(workflow.Done)
@@ -432,11 +437,22 @@ func (e *LocalScheduler) triggerIfRequired(task workflow.WorkflowExecution) {
 func (e *LocalScheduler) allDependenciesCompleted(taskName, partition, version string) bool {
 	for depId, _ := range e.repository.Upstreams(taskName, version) {
 		dep := e.fetchOrCreate(depId, partition)
-		if dep.Status != workflow.Done {
+		if !e.settled(dep) {
 			return false
 		}
 	}
 	return true
+}
+
+// settled answers whether a requirement lets what depends on it go: done,
+// or optional and failed past its retries (passed over). A required task
+// that failed holds everything after it, as before.
+func (e *LocalScheduler) settled(dep *workflow.ExecutableWorkflowInstance) bool {
+	return dep.Status == workflow.Done || e.passedOver(dep)
+}
+
+func (e *LocalScheduler) passedOver(dep *workflow.ExecutableWorkflowInstance) bool {
+	return dep.DOptional && dep.Status == workflow.Failed && dep.Retries() >= dep.MaxRetries()
 }
 
 func (e *LocalScheduler) handleRetry(rt *workflow.ExecutableWorkflowInstance) {

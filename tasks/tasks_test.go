@@ -477,3 +477,62 @@ func TestShownCutsAtARuneBoundary(t *testing.T) {
 		t.Fatalf("cut line = %q", got)
 	}
 }
+
+// A task stopped at its timeout with its target there did the work: the
+// target is the proof, the clock is not (13 runs of 500 ended unchecked on
+// an agent that had changed the tree and kept polishing it, 2026-11-06).
+func TestATimedOutTaskWithItsTargetIsDone(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	reg.Add(&types[0])
+	defs := writeDAG(t, root, reg, map[string]string{
+		"slow":  "type: command\ncommand: echo made > made.txt; sleep 20\ntimeout: 1s\ntarget:\n  file: made.txt\n",
+		"after": "type: command\ncommand: echo after\nrequires:\n  - table_pattern: slow\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.Contains(seq, "done slow") || !strings.Contains(seq, "done after") || strings.Contains(seq, "failed") {
+		t.Fatalf("events = %q", seq)
+	}
+	out, err := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.slow", "2026-10-02")
+	if err != nil || !strings.Contains(out, "timed out after 1s") || !strings.Contains(out, "its target is there") {
+		t.Fatalf("output = %q, %v", out, err)
+	}
+}
+
+// An optional task that fails past its retries is passed over: what requires
+// it runs, and reads an empty output from it. A required one still holds
+// everything after it.
+func TestAFailedOptionalTaskIsPassedOver(t *testing.T) {
+	for _, c := range []struct {
+		name, flag, want, never string
+	}{
+		{"optional", "optional: true\n", "done after", ""},
+		{"required", "", "", "started after"},
+	} {
+		root := t.TempDir()
+		types := []Base{Command()}
+		reg := factory.NewComponent()
+		reg.Add(&types[0])
+		defs := writeDAG(t, root, reg, map[string]string{
+			"plan":  "type: command\ncommand: exit 1\nmax_retries: 1\n" + c.flag,
+			"after": "type: command\ncommand: 'echo \"plan said [{{ output \"plan\" }}]\"'\nrequires:\n  - table_pattern: plan\n",
+		})
+		seq := strings.Join(run(t, root, types, defs), " | ")
+		if strings.Count(seq, "failed plan") != 2 {
+			t.Fatalf("%s: plan is tried twice and fails twice: %q", c.name, seq)
+		}
+		if c.want != "" && !strings.Contains(seq, c.want) {
+			t.Fatalf("%s: events = %q, want %q", c.name, seq, c.want)
+		}
+		if c.never != "" && strings.Contains(seq, c.never) {
+			t.Fatalf("%s: events = %q, never %q", c.name, seq, c.never)
+		}
+		if c.want != "" {
+			out, err := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.after", "2026-10-02")
+			if err != nil || !strings.Contains(out, "plan said []") {
+				t.Fatalf("%s: after read an empty plan: %q, %v", c.name, out, err)
+			}
+		}
+	}
+}

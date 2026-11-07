@@ -53,6 +53,12 @@ type YamlTaskDefinition struct {
 	AllowLargeResults  string                 `yaml:"allow_large_results,omitempty"`
 	Timeout            string                 `yaml:"timeout,omitempty"`
 	MaxRetries         int32                  `yaml:"max_retries,omitempty"`
+	// Optional says a task that fails past its retries is passed over, not
+	// the end of the run: what requires it still runs, its output is empty,
+	// and the run reports it as failed. Without it a failed requirement
+	// holds everything after it (a planning step that ran out of time ended
+	// 23 runs of 500 on a tree nothing had checked, 2026-11-06).
+	Optional bool `yaml:"optional,omitempty"`
 	// Agent names who runs the task when the type is run by an agent (a
 	// coding agent, a reviewer): the factory for that type reads it.
 	Agent string `yaml:"agent,omitempty"`

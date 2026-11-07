@@ -104,6 +104,7 @@ const commandSchema = `{
     "target": {"$ref": "#/definitions/target"},
     "timeout": {"type": "string"},
     "max_retries": {"type": "integer", "minimum": 0},
+    "optional": {"type": "boolean", "description": "Failed past its retries, the task is passed over: what requires it still runs, with an empty output from it."},
     "when": {"type": "string"}
   },
   "required": ["type", "command"],
