@@ -3,10 +3,8 @@ package tasks
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -41,13 +39,10 @@ type Score struct {
 	By        string  `json:"by"`
 }
 
-const (
-	// ByDecision says a decision model answered.
-	ByDecision = "decision"
-	// ByElse says the task's `else` command answered: no decision model on
-	// the host, or the one there did not answer in time.
-	ByElse = "else"
-)
+// ByDecision is Score.By when a decision model answered. Otherwise By is
+// the name of the `else` task whose output answered: no decision model on
+// the host, or the one there did not answer in time.
+const ByDecision = "decision"
 
 // ParseScore reads a decision task's output.
 func ParseScore(s string) (Score, error) {
@@ -61,17 +56,22 @@ func ParseScore(s string) (Score, error) {
 // Decision is the task type whose proof is a probability. `condition:` is
 // a statement, `state:` the evidence it is judged on (a template over args,
 // partition, outputs and files, like a prompt), `threshold:` the
-// probability it passes at, and `else:` a shell line whose exit status
-// answers when no decision model does — 0 is pass. A nil Decider is a valid
-// host: every decision task then answers by its `else`, so a workflow that
-// names the type never needs a decision model to run.
+// probability it passes at, and `else:` the task whose output answers when
+// no decision model does: a command task of the same DAG, required by this
+// one, that prints PASS or FAIL (or a Score as JSON). The branch without a
+// model is a task of the DAG, not a line hidden in this one. A nil Decider
+// is a valid host: every decision task then passes its `else` through, so a
+// workflow that names the type never needs a decision model to run.
 //
 //	type: decision
 //	condition: The change does what the task asks, completely and nothing else.
 //	state: |
 //	  {{ output "review" }}
 //	threshold: 0.8
-//	else: grep -q '^verdict: PASS' review.md
+//	else: review-rule
+//	requires:
+//	  - table_pattern: review
+//	  - table_pattern: review-rule
 func Decision(d Decider) Base {
 	return Base{Type: "decision", SchemaDoc: []byte(decisionSchema), Run: func(ctx context.Context, b *Base, def *templates.YamlTaskDefinition, name string) (string, error) {
 		return runDecision(ctx, d, b, def, name)
@@ -83,7 +83,7 @@ func runDecision(ctx context.Context, dec Decider, b *Base, d *templates.YamlTas
 		return "", fmt.Errorf("task %s: a decision task needs a condition", name)
 	}
 	if strings.TrimSpace(d.Else) == "" {
-		return "", fmt.Errorf("task %s: a decision task needs an else command, the answer without a decision model", name)
+		return "", fmt.Errorf("task %s: a decision task needs an else, the task whose output answers without a decision model", name)
 	}
 	threshold := d.Threshold
 	if threshold <= 0 || threshold > 1 {
@@ -100,15 +100,15 @@ func runDecision(ctx context.Context, dec Decider, b *Base, d *templates.YamlTas
 		if err == nil {
 			score.P, score.Pass, score.By = p, p >= threshold, ByDecision
 		} else {
-			logger.Log.Info(fmt.Sprintf("Task %s: the decision model did not answer (%s); its else command decides", name, err), "component", "workflow")
+			logger.Log.Info(fmt.Sprintf("Task %s: the decision model did not answer (%s); its else task %s decides", name, err, d.Else), "component", "workflow")
 		}
 	}
 	if score.By == "" {
-		pass, err := b.decideByElse(ctx, d, name)
+		pass, err := b.decideByElse(d, name)
 		if err != nil {
 			return "", err
 		}
-		score.Pass, score.By = pass, ByElse
+		score.Pass, score.By = pass, strings.TrimSpace(d.Else)
 		if pass {
 			score.P = 1
 		}
@@ -158,27 +158,47 @@ func (b *Base) decide(ctx context.Context, dec Decider, d *templates.YamlTaskDef
 	return p, nil
 }
 
-// decideByElse runs the task's `else` line in the run's directory: exit 0
-// is pass, anything else is fail. An error starting it is the task's.
-func (b *Base) decideByElse(ctx context.Context, d *templates.YamlTaskDefinition, name string) (bool, error) {
-	line, err := b.Render(d, d.Else)
+// decideByElse reads the `else` task's output: a Score as JSON (its pass),
+// or the word PASS or FAIL (TRUE/FALSE, YES/NO) at its start. A short name
+// is a task of the same group, a dotted one is any; its output is there when
+// this task requires it.
+func (b *Base) decideByElse(d *templates.YamlTaskDefinition, name string) (bool, error) {
+	ref := strings.TrimSpace(d.Else)
+	full := ref
+	if !strings.Contains(ref, ".") {
+		seg := strings.Split(name, ".")
+		if len(seg) >= 3 {
+			full = seg[0] + "." + seg[1] + "." + ref
+		}
+	}
+	out, err := b.Outputs.Read(full, b.Partition)
 	if err != nil {
-		return false, fmt.Errorf("task %s: else template: %w", name, err)
+		return false, fmt.Errorf("task %s: the output of its else task %s is not there (is it required by this task?): %w", name, ref, err)
 	}
-	cmd := shellCommand(ctx, b.Dir, line, b.Env)
-	killGroupOnCancel(cmd)
-	err = cmd.Run()
-	if err == nil {
-		return true, nil
+	pass, ok := ParseAnswer(out)
+	if !ok {
+		return false, fmt.Errorf("task %s: the else task %s answered %q, not PASS or FAIL nor a score", name, ref, shown(strings.TrimSpace(out)))
 	}
-	if ctx.Err() != nil {
-		return false, fmt.Errorf("task %s: else command stopped: %w", name, ctx.Err())
+	return pass, nil
+}
+
+// ParseAnswer reads a yes-or-no answer as an else task prints one: a Score
+// as JSON, or a line starting with PASS or FAIL (TRUE/FALSE, YES/NO), in
+// any case.
+func ParseAnswer(out string) (pass bool, ok bool) {
+	t := strings.TrimSpace(out)
+	if strings.HasPrefix(t, "{") {
+		sc, err := ParseScore(t)
+		return sc.Pass, err == nil
 	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return false, nil
+	word := strings.ToUpper(strings.TrimRight(strings.Fields(t + " x")[0], ".:,;"))
+	switch word {
+	case "PASS", "TRUE", "YES":
+		return true, true
+	case "FAIL", "FALSE", "NO":
+		return false, true
 	}
-	return false, fmt.Errorf("task %s: else command could not run: %w", name, err)
+	return false, false
 }
 
 const decisionSchema = `{
@@ -189,7 +209,7 @@ const decisionSchema = `{
     "condition": {"type": "string", "description": "The statement the decision model scores, true or false of the state. A Go template over args and partition."},
     "state": {"type": "string", "description": "The evidence the condition is judged on: a template over args, partition, outputs ({{ output \"task\" }}) and files ({{ file \"x\" }})."},
     "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "The probability the task passes at (default: the host's, else 0.7)."},
-    "else": {"type": "string", "description": "A shell line run in the project when no decision model answers: exit 0 is pass. A Go template like the command."},
+    "else": {"type": "string", "description": "The task whose output answers when no decision model does: a task of this DAG, required by this one, that prints PASS or FAIL (or a score as JSON). A short name is a task of the same group."},
     "table_description": {"type": "string"},
     "dataset_description": {"type": "string"},
     "field_descriptions": {"type": "object"},

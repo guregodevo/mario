@@ -27,13 +27,16 @@ func (f *fakeDecider) Decide(_ context.Context, condition, state string) (float6
 
 func (f *fakeDecider) DefaultThreshold() float64 { return f.threshold }
 
-// decisionDAG is a command whose output a decision task scores: the review
-// writes its verdict, the score judges it, with grep as the else.
+// decisionDAG: a review writes its verdict, a rule task reads it the
+// deterministic way, and a decision task scores it with the rule as its
+// else — the branch without a model is a task of the DAG.
 func decisionDAG(extra string) map[string]string {
 	return map[string]string{
 		"review": "type: command\ncommand: |\n  printf 'verdict: PASS\\nlooks right\\n'\n",
+		"rule": "type: command\ncommand: |\n  if grep -q '^verdict: PASS' out/wf/steps/review/2026-10-02; then echo PASS; else echo FAIL; fi\n" +
+			"requires:\n  - table_pattern: review\n",
 		"score": "type: decision\ncondition: The change does what {{.what}} asks.\nstate: |\n  {{ output \"review\" }}\n" +
-			"else: |\n  grep -q '^verdict: PASS' out/wf/steps/review/2026-10-02\nargs:\n  what: the task\nrequires:\n  - table_pattern: review\n" + extra,
+			"else: rule\nargs:\n  what: the task\nrequires:\n  - table_pattern: review\n  - table_pattern: rule\n" + extra,
 	}
 }
 
@@ -51,10 +54,12 @@ func runDecisionDAG(t *testing.T, dec Decider, files map[string]string) (string,
 	return out, seq
 }
 
+const decisionOrder = "started review | done review | started rule | done rule | started score | done score"
+
 func TestADecisionTaskScoresAnUpstreamOutput(t *testing.T) {
 	dec := &fakeDecider{p: 0.9}
 	out, seq := runDecisionDAG(t, dec, decisionDAG("threshold: 0.8\n"))
-	if got := strings.Join(seq, " | "); got != "started review | done review | started score | done score" {
+	if got := strings.Join(seq, " | "); got != decisionOrder {
 		t.Fatalf("events = %q", got)
 	}
 	sc, err := ParseScore(out)
@@ -93,35 +98,67 @@ func TestTheThresholdIsTheFilesThenTheHostsThenTheDefault(t *testing.T) {
 	}
 }
 
-func TestWithoutADeciderTheElseCommandAnswers(t *testing.T) {
+func TestWithoutADeciderTheElseTaskAnswers(t *testing.T) {
 	out, seq := runDecisionDAG(t, nil, decisionDAG(""))
-	if got := strings.Join(seq, " | "); got != "started review | done review | started score | done score" {
+	if got := strings.Join(seq, " | "); got != decisionOrder {
 		t.Fatalf("events = %q", got)
 	}
 	sc, err := ParseScore(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sc.Pass || sc.P != 1 || sc.By != ByElse || sc.Threshold != DefaultDecisionThreshold {
+	if !sc.Pass || sc.P != 1 || sc.By != "rule" || sc.Threshold != DefaultDecisionThreshold {
 		t.Fatalf("score = %+v", sc)
 	}
 }
 
-func TestAnElseThatExitsNonZeroIsAFail(t *testing.T) {
+func TestAnElseTaskThatSaysFailIsAFail(t *testing.T) {
 	files := decisionDAG("")
 	files["review"] = "type: command\ncommand: |\n  printf 'verdict: FAIL\\n'\n"
 	out, _ := runDecisionDAG(t, nil, files)
 	sc, _ := ParseScore(out)
-	if sc.Pass || sc.P != 0 || sc.By != ByElse {
+	if sc.Pass || sc.P != 0 || sc.By != "rule" {
 		t.Fatalf("score = %+v", sc)
 	}
 }
 
-func TestADeciderThatErrsFallsBackToElse(t *testing.T) {
+func TestADeciderThatErrsFallsBackToTheElseTask(t *testing.T) {
 	out, _ := runDecisionDAG(t, &fakeDecider{err: errors.New("no model")}, decisionDAG("threshold: 0.8\n"))
 	sc, _ := ParseScore(out)
-	if !sc.Pass || sc.By != ByElse || sc.Threshold != 0.8 {
+	if !sc.Pass || sc.By != "rule" || sc.Threshold != 0.8 {
 		t.Fatalf("score = %+v", sc)
+	}
+}
+
+func TestAnElseTaskMayAnswerWithAScore(t *testing.T) {
+	files := decisionDAG("")
+	files["rule"] = "type: command\ncommand: |\n  echo '{\"p\":0,\"threshold\":0.5,\"pass\":false,\"by\":\"hand\"}'\nrequires:\n  - table_pattern: review\n"
+	out, _ := runDecisionDAG(t, nil, files)
+	sc, _ := ParseScore(out)
+	if sc.Pass || sc.By != "rule" {
+		t.Fatalf("score = %+v", sc)
+	}
+}
+
+func TestAnElseTaskThatAnswersNeitherFailsTheDecision(t *testing.T) {
+	files := decisionDAG("")
+	files["rule"] = "type: command\ncommand: echo maybe\nrequires:\n  - table_pattern: review\n"
+	_, seq := runDecisionDAG(t, nil, files)
+	joined := strings.Join(seq, " | ")
+	if !strings.Contains(joined, "failed score") || !strings.Contains(joined, "not PASS or FAIL") {
+		t.Fatalf("events = %q", joined)
+	}
+}
+
+func TestParseAnswerReadsWordsAndScores(t *testing.T) {
+	for in, want := range map[string]bool{"PASS\n": true, "pass: all good": true, "True": true, "yes": true, "FAIL": false, "false": false, "No.": false, `{"pass":true}`: true} {
+		got, ok := ParseAnswer(in)
+		if !ok || got != want {
+			t.Errorf("ParseAnswer(%q) = %v, %v", in, got, ok)
+		}
+	}
+	if _, ok := ParseAnswer("maybe"); ok {
+		t.Error("maybe is not an answer")
 	}
 }
 
@@ -146,18 +183,10 @@ func TestADecisionWithAFileTargetWritesTheScoreThere(t *testing.T) {
 }
 
 func TestADecisionTaskWithoutAnElseIsRefused(t *testing.T) {
-	root := t.TempDir()
 	types := []Base{Command(), Decision(nil)}
 	reg := factory.NewComponent()
 	for i := range types {
 		reg.Add(&types[i])
-	}
-	dir := filepath.Join(root, "wf", "steps")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "score.yaml"), []byte("type: decision\ncondition: x\nstate: y\n"), 0o644); err != nil {
-		t.Fatal(err)
 	}
 	v := factory.NewValidator(reg)
 	if err, _ := v.ValidateYAML([]byte("type: decision\ncondition: x\nstate: y\n")); err == nil {
