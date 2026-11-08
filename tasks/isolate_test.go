@@ -151,7 +151,7 @@ func TestAFanoutStopsAtMaxUnsettled(t *testing.T) {
 		t.Fatalf("result = %+v", r)
 	}
 	if r.Attempts[2].Patch != "f.txt: attempt 3\n" {
-		t.Fatalf("without save the patch is in the output: %+v", r.Attempts[2])
+		t.Fatalf("each attempt's patch is in the output: %+v", r.Attempts[2])
 	}
 }
 
