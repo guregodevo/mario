@@ -44,15 +44,14 @@ type Applier interface {
 	Apply(ctx context.Context, dir, patch string) error
 }
 
-// attempt is one isolated run: its number in a fan-out (0 alone), its
-// change, its answer and its failure, and, while the fan-out lasts, the
-// directory it ran in (its checks run there).
+// attempt is one isolated run of a fan-out: its number, its change, its
+// failure, and, while the fan-out lasts, the directory it ran in (its checks
+// run there).
 type attempt struct {
-	n      int
-	patch  string
-	answer string
-	err    error
-	iso    Isolation
+	n     int
+	patch string
+	err   error
+	iso   Isolation
 }
 
 // withN is the definition with the arg `n` set: the attempt's number, for
@@ -69,11 +68,11 @@ func withN(d *templates.YamlTaskDefinition, n int) *templates.YamlTaskDefinition
 	return &c
 }
 
-// isolated runs the task once in a directory of its own. The error is the
+// isolated runs one attempt in a directory of its own. The error is the
 // isolation's (none could be made); the attempt's own failure is in a.err,
 // with whatever it changed before failing in a.patch. With keep, the
 // directory stays open in a.iso for the caller to close.
-func (b *Base) isolated(ctx context.Context, d *templates.YamlTaskDefinition, name string, n int, keep ...bool) (attempt, error) {
+func (b *Base) isolated(ctx context.Context, d *templates.YamlTaskDefinition, name string, n int, keep bool) (attempt, error) {
 	a := attempt{n: n}
 	if b.Isolator == nil {
 		return a, fmt.Errorf("task %s: isolate needs a host that gives a task its own working directory, and this one does not", name)
@@ -86,7 +85,7 @@ func (b *Base) isolated(ctx context.Context, d *templates.YamlTaskDefinition, na
 	if err != nil {
 		return a, fmt.Errorf("task %s: isolate: %w", label, err)
 	}
-	if len(keep) > 0 && keep[0] {
+	if keep {
 		a.iso = iso
 	} else {
 		defer iso.Close()
@@ -94,7 +93,7 @@ func (b *Base) isolated(ctx context.Context, d *templates.YamlTaskDefinition, na
 	bb := *b
 	bb.Dir = iso.Dir()
 	dd := withN(d, n)
-	a.answer, a.err = bb.once(ctx, dd, name)
+	_, a.err = bb.once(ctx, dd, name)
 	// The change is read even when the run failed or ran out of time: what
 	// it did is the evidence, and the clock may have been the only failure.
 	cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -130,7 +129,6 @@ type fanoutAttempt struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	Lines int    `json:"lines"`
-	Saved string `json:"saved,omitempty"`
 	Patch string `json:"patch,omitempty"`
 }
 
@@ -140,8 +138,8 @@ type fanoutAttempt struct {
 // saved, exits 0; or, when it does not, with `until` and a decision model on
 // the host, the model reads what `between` printed and answers at or above
 // the threshold. The model can only settle sooner, never run more.
-// Without `between` the fan-out is fixed at Min. Each attempt's patch is
-// written to `save` ({{.n}} in it) when one is named, else kept in the output.
+// Without checks or `between` the fan-out is fixed at Min. Each attempt's
+// patch is kept in the output.
 func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name string) (string, error) {
 	f := d.Fanout
 	max := f.Max
@@ -177,9 +175,6 @@ func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name
 					}
 				}
 				return errs[i]
-			}
-			if err := b.save(d, a); err != nil {
-				return fmt.Errorf("task %s: saving attempt %d: %w", name, a.n, err)
 			}
 			atts = append(atts, a)
 		}
@@ -230,11 +225,7 @@ func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name
 		} else {
 			ok++
 		}
-		if strings.TrimSpace(f.Save) != "" {
-			fa.Saved, _ = b.Render(withN(d, a.n), f.Save)
-		} else {
-			fa.Patch = a.patch
-		}
+		fa.Patch = a.patch
 		out.Attempts = append(out.Attempts, fa)
 	}
 	if ok == 0 {
@@ -430,25 +421,6 @@ func winner(atts []attempt, points map[string]int) attempt {
 		best = &atts[0]
 	}
 	return *best
-}
-
-// save writes an attempt's patch where the fan-out's `save` names, relative
-// to the run's directory. Nothing to do without one.
-func (b *Base) save(d *templates.YamlTaskDefinition, a attempt) error {
-	if strings.TrimSpace(d.Fanout.Save) == "" {
-		return nil
-	}
-	path, err := b.Render(withN(d, a.n), d.Fanout.Save)
-	if err != nil {
-		return fmt.Errorf("save template: %w", err)
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(b.Dir, path)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(a.patch), 0o644)
 }
 
 // settled answers whether the attempts so far are settled, who said so, the

@@ -28,7 +28,6 @@ type YamlFanout struct {
 	Max     int    `yaml:"max,omitempty"`
 	Between string `yaml:"between,omitempty"`
 	Until   string `yaml:"until,omitempty"`
-	Save    string `yaml:"save,omitempty"`
 	// Checks are executables (glob patterns, templates) the engine runs in
 	// each attempt's directory after every wave: one that passes on the run's
 	// directory as it stands proves nothing and is not counted; an attempt
@@ -118,16 +117,11 @@ type YamlTaskDefinition struct {
 	Each []string `yaml:"each,omitempty"`
 	// Item is the one entry of Each this copy was made for.
 	Item string `yaml:"-"`
-	// Isolate runs the task in a working directory of its own, a copy of the
-	// run's that the host makes (a git worktree, a container): its output is
-	// the change it made there, as a patch, and the run's directory is left
-	// as it was. It needs a host that isolates (tasks.Isolator).
-	Isolate bool `yaml:"isolate,omitempty"`
-	// Fanout runs the task several times, each isolated: Min attempts at
-	// once, then one more at a time until Between says the attempts are
-	// settled (its exit status, or the host's decision model reading what it
-	// printed against Until), or Max is reached. Save is where each attempt's
-	// patch is written ({{.n}}, the attempt's number, and the partition in it).
+	// Fanout runs the task several times, each in a working directory of its
+	// own the host makes (tasks.Isolator): Min attempts at once, then one
+	// more at a time until the attempts are settled (their checks, Between's
+	// exit status, or the host's decision model settling sooner), or Max is
+	// reached. Each attempt's change is in the task's output.
 	Fanout *YamlFanout `yaml:"fanout,omitempty"`
 
 	// Lazy renderer for the field (e.g., Prompt)
@@ -378,25 +372,19 @@ func (v *YAMLValidator) validateSchema(taskType string, documentLoader gojsonsch
 	return nil
 }
 
-// withoutRunShape returns the YAML without its `isolate` and `fanout` keys
-// (how a task is run, read by every type, listed by none of their schemas),
-// with the fan-out checked: a fan-out is isolated, bounded, and not an each.
+// withoutRunShape returns the YAML without its `fanout` key (how a task is
+// run, read by every type, listed by none of their schemas), checked: a
+// fan-out is bounded and not an each.
 func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 	var doc map[string]interface{}
 	if err := yaml.Unmarshal(yamlContent, &doc); err != nil || doc == nil {
 		return yamlContent, nil
 	}
-	_, isolated := doc["isolate"]
 	raw, fanned := doc["fanout"]
-	if !isolated && !fanned {
+	if !fanned {
 		return yamlContent, nil
 	}
-	if v, ok := doc["isolate"]; ok {
-		if _, isBool := v.(bool); !isBool {
-			return nil, fmt.Errorf("isolate: true or false")
-		}
-	}
-	if fanned {
+	{
 		if hasEach {
 			return nil, fmt.Errorf("fanout and each: one or the other (each names its copies, fanout counts them)")
 		}
@@ -409,13 +397,13 @@ func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 				m[fmt.Sprint(k)] = v
 			}
 		default:
-			return nil, fmt.Errorf("fanout: an object with min, and max, between, until, save")
+			return nil, fmt.Errorf("fanout: an object with min, and max, between, until, checks, own, pick")
 		}
 		for k := range m {
 			switch k {
-			case "min", "max", "between", "until", "save", "checks", "own", "pick":
+			case "min", "max", "between", "until", "checks", "own", "pick":
 			default:
-				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, save, checks, own, pick)", k)
+				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, checks, own, pick)", k)
 			}
 		}
 		min, okMin := m["min"].(int)
@@ -443,7 +431,6 @@ func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 			return nil, fmt.Errorf("fanout: own names an attempt's own check among checks; there are none")
 		}
 	}
-	delete(doc, "isolate")
 	delete(doc, "fanout")
 	return yaml.Marshal(doc)
 }

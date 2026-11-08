@@ -90,30 +90,9 @@ func runShaped(t *testing.T, iso Isolator, dec Decider, files map[string]string)
 	return root, defs, run(t, root, types, defs)
 }
 
-func TestAnIsolatedTaskLeavesTheRunsTreeAndAnswersItsChange(t *testing.T) {
-	iso := &copyIsolator{}
-	root, _, seq := runShaped(t, iso, nil, map[string]string{
-		"edit": "type: command\nisolate: true\ncommand: echo changed > f.txt\n",
-	})
-	if got := strings.Join(seq, " | "); got != "started edit | done edit" {
-		t.Fatalf("events = %q", got)
-	}
-	if b, _ := os.ReadFile(filepath.Join(root, "f.txt")); string(b) != "start\n" {
-		t.Fatalf("the run's tree changed: %q", b)
-	}
-	if out, _ := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.edit", "2026-10-02"); out != "f.txt: changed\n" {
-		t.Fatalf("output = %q", out)
-	}
-	for _, d := range iso.dirs {
-		if _, err := os.Stat(d); !os.IsNotExist(err) {
-			t.Fatalf("isolation %s not removed", d)
-		}
-	}
-}
-
-func TestIsolateWithoutAnIsolatorFailsAndSaysWhy(t *testing.T) {
+func TestAFanoutWithoutAnIsolatorFailsAndSaysWhy(t *testing.T) {
 	_, _, seq := runShaped(t, nil, nil, map[string]string{
-		"edit": "type: command\nisolate: true\ncommand: echo changed > f.txt\n",
+		"edit": "type: command\nfanout:\n  min: 2\ncommand: echo changed > f.txt\n",
 	})
 	if got := strings.Join(seq, " | "); !strings.Contains(got, "failed edit") || !strings.Contains(got, "own working directory") {
 		t.Fatalf("events = %q", got)
@@ -136,16 +115,15 @@ func readFanout(t *testing.T, root string) fanoutResult {
 func TestAFanoutWithoutBetweenRunsMinAttemptsEachInItsOwnTree(t *testing.T) {
 	iso := &copyIsolator{}
 	root, _, _ := runShaped(t, iso, nil, map[string]string{
-		"try": "type: command\nfanout:\n  min: 3\n  save: patches/{{.n}}.patch\ncommand: echo attempt {{.n}} > f.txt\n",
+		"try": "type: command\nfanout:\n  min: 3\ncommand: echo attempt {{.n}} > f.txt\n",
 	})
 	r := readFanout(t, root)
 	if len(r.Attempts) != 3 || !r.Settled || r.By != "fixed" {
 		t.Fatalf("result = %+v", r)
 	}
-	for n := 1; n <= 3; n++ {
-		b, err := os.ReadFile(filepath.Join(root, "patches", fmt.Sprintf("%d.patch", n)))
-		if err != nil || string(b) != fmt.Sprintf("f.txt: attempt %d\n", n) {
-			t.Fatalf("patch %d = %q, %v", n, b, err)
+	for i, a := range r.Attempts {
+		if a.Patch != fmt.Sprintf("f.txt: attempt %d\n", i+1) {
+			t.Fatalf("attempt %d patch = %q", i+1, a.Patch)
 		}
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, "f.txt")); string(b) != "start\n" {
@@ -155,8 +133,8 @@ func TestAFanoutWithoutBetweenRunsMinAttemptsEachInItsOwnTree(t *testing.T) {
 
 func TestAFanoutAddsAttemptsUntilBetweenSettlesIt(t *testing.T) {
 	root, _, _ := runShaped(t, &copyIsolator{}, nil, map[string]string{
-		"try": "type: command\nfanout:\n  min: 2\n  max: 5\n  save: patches/{{.n}}.patch\n" +
-			"  between: '[ $(ls patches | wc -l) -ge 3 ]'\ncommand: echo attempt {{.n}} > f.txt\n",
+		"try": "type: command\nfanout:\n  min: 2\n  max: 5\n" +
+			"  between: 'echo x >> waves; [ $(wc -l < waves) -ge 2 ]'\ncommand: echo attempt {{.n}} > f.txt\n",
 	})
 	r := readFanout(t, root)
 	if len(r.Attempts) != 3 || !r.Settled || r.By != "between" {
@@ -180,14 +158,14 @@ func TestAFanoutStopsAtMaxUnsettled(t *testing.T) {
 func TestTheDeciderSettlesAFanoutFromWhatBetweenPrinted(t *testing.T) {
 	dec := &seqDecider{ps: []float64{0.2, 0.9}}
 	root, _, _ := runShaped(t, &copyIsolator{}, dec, map[string]string{
-		"try": "type: command\nfanout:\n  min: 2\n  max: 5\n  save: patches/{{.n}}.patch\n" +
-			"  between: 'ls patches; exit 1'\n  until: The attempts agree.\ncommand: echo attempt {{.n}} > f.txt\n",
+		"try": "type: command\nfanout:\n  min: 2\n  max: 5\n" +
+			"  between: 'echo wave; exit 1'\n  until: The attempts agree.\ncommand: echo attempt {{.n}} > f.txt\n",
 	})
 	r := readFanout(t, root)
 	if len(r.Attempts) != 3 || !r.Settled || r.By != ByDecision || r.P == nil || *r.P != 0.9 {
 		t.Fatalf("result = %+v", r)
 	}
-	if len(dec.states) != 2 || !strings.Contains(dec.states[1], "3.patch") {
+	if len(dec.states) != 2 || !strings.Contains(dec.states[1], "wave") {
 		t.Fatalf("the decider read %q", dec.states)
 	}
 }
@@ -216,15 +194,15 @@ func TestAFanoutsShapeIsChecked(t *testing.T) {
 		"type: command\ncommand: x\nfanout:\n  min: 2\n  until: agree\n",
 		"type: command\ncommand: x\nfanout:\n  min: 2\n  howmany: 3\n",
 		"type: command\ncommand: x\neach: [a, b]\nfanout:\n  min: 2\n",
-		"type: command\ncommand: x\nisolate: yes please\n",
+		"type: command\ncommand: x\nisolate: true\n",
+		"type: command\ncommand: x\nfanout:\n  min: 2\n  save: p/{{.n}}\n",
 	} {
 		if err, _ := templates.YamlParse(v, []byte(bad)); err == nil {
 			t.Errorf("accepted:\n%s", bad)
 		}
 	}
 	for _, good := range []string{
-		"type: command\ncommand: x\nisolate: true\n",
-		"type: command\ncommand: x\nfanout:\n  min: 2\n  max: 5\n  between: 'true'\n  until: agree\n  save: p/{{.n}}\n",
+		"type: command\ncommand: x\nfanout:\n  min: 2\n  max: 5\n  between: 'true'\n  until: agree\n",
 	} {
 		if err, _ := templates.YamlParse(v, []byte(good)); err != nil {
 			t.Errorf("refused %q: %v", good, err)

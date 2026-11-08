@@ -52,8 +52,8 @@ type Base struct {
 	// them.
 	Env     func() []string
 	Outputs Outputs // where outputs are kept when no target is named
-	// Isolator gives an isolated task, or each attempt of a fan-out, a
-	// working directory of its own; nil: such a task fails and says why.
+	// Isolator gives each attempt of a fan-out a working directory of its
+	// own; nil: a fan-out fails and says why.
 	Isolator Isolator
 	// Decider reads a fan-out's evidence against its `until`; nil: the
 	// `between` command's exit status settles it.
@@ -114,8 +114,8 @@ func (b *Base) optional(name string) bool {
 
 // Fn is the task's run: Run under the definition's timeout, then the proof —
 // the target it named must exist, or the output is written where the
-// endpoint looks. An isolated task runs in a working directory of its own
-// and answers its change; a fan-out runs several isolated attempts.
+// endpoint looks. A fan-out runs several attempts, each in a working
+// directory of its own.
 func (b *Base) Fn(name string) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		d, defined := b.Defs[name]
@@ -146,13 +146,6 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		switch {
 		case d.Fanout != nil:
 			out, err = b.fanout(ctx, d, name)
-		case d.Isolate:
-			var a attempt
-			a, err = b.isolated(ctx, d, name, 0)
-			if err == nil && a.err != nil {
-				err = a.err
-			}
-			out = a.patch
 		default:
 			out, err = b.once(ctx, d, name)
 		}
@@ -215,12 +208,12 @@ func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name s
 
 // NewDataEndpoint is the task's proof: the target its definition names, or
 // its output by convention — also for an external, whose maker writes there.
-// An isolated task's or a fan-out's proof is its output: its target is about
-// the copy it ran in (checked there, by once), and in the run's directory it
+// A fan-out's proof is its output: its target is about the copy each
+// attempt ran in (checked there, by once), and in the run's directory it
 // may hold before the task ever ran (an "uncommitted change" target holds in
 // any dirty tree), which would skip it.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
-	if d, known := b.Defs[name]; known && (d.Isolate || d.Fanout != nil) {
+	if d, known := b.Defs[name]; known && d.Fanout != nil {
 		return b.Outputs.Endpoint(name, b.Partition)
 	}
 	return b.targetEndpoint(name)
