@@ -29,6 +29,16 @@ type YamlFanout struct {
 	Between string `yaml:"between,omitempty"`
 	Until   string `yaml:"until,omitempty"`
 	Save    string `yaml:"save,omitempty"`
+	// Checks are executables (glob patterns, templates) the engine runs in
+	// each attempt's directory after every wave: one that passes on the run's
+	// directory as it stands proves nothing and is not counted; an attempt
+	// scores a point per other check it passes. Own names an attempt's own
+	// check ({{.n}} in it), which never scores for it. Pick applies the
+	// attempt with the most points to the run's directory (a tie: the
+	// smaller change).
+	Checks []string `yaml:"checks,omitempty"`
+	Own    string   `yaml:"own,omitempty"`
+	Pick   bool     `yaml:"pick,omitempty"`
 }
 
 // MaxFanout bounds a fan-out: attempts are model turns, and a typo in max
@@ -403,9 +413,9 @@ func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 		}
 		for k := range m {
 			switch k {
-			case "min", "max", "between", "until", "save":
+			case "min", "max", "between", "until", "save", "checks", "own", "pick":
 			default:
-				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, save)", k)
+				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, save, checks, own, pick)", k)
 			}
 		}
 		min, okMin := m["min"].(int)
@@ -418,10 +428,19 @@ func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 				return nil, fmt.Errorf("fanout: max is a number from min to %d", MaxFanout)
 			}
 		}
+		_, hasChecks := m["checks"]
 		if until, has := m["until"]; has && fmt.Sprint(until) != "" {
-			if b, _ := m["between"].(string); strings.TrimSpace(b) == "" {
-				return nil, fmt.Errorf("fanout: until needs between, the command whose output it is judged on")
+			if b, _ := m["between"].(string); strings.TrimSpace(b) == "" && !hasChecks {
+				return nil, fmt.Errorf("fanout: until needs checks or between, the evidence it is judged on")
 			}
+		}
+		if hasChecks {
+			if _, ok := m["checks"].([]interface{}); !ok {
+				return nil, fmt.Errorf("fanout: checks is a list of executables (glob patterns)")
+			}
+		}
+		if _, has := m["own"]; has && !hasChecks {
+			return nil, fmt.Errorf("fanout: own names an attempt's own check among checks; there are none")
 		}
 	}
 	delete(doc, "isolate")
