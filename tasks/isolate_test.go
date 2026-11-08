@@ -196,8 +196,6 @@ func TestAFanoutsShapeIsChecked(t *testing.T) {
 		"type: command\ncommand: x\neach: [a, b]\nfanout:\n  min: 2\n",
 		"type: command\ncommand: x\nisolate: true\n",
 		"type: command\ncommand: x\nfanout:\n  min: 2\n  save: p/{{.n}}\n",
-		"type: command\ncommand: x\nfanout:\n  min: 3\n  prefer: 4\n",
-		"type: command\ncommand: x\nfanout:\n  min: 3\n  prefer: 0\n",
 	} {
 		if err, _ := templates.YamlParse(v, []byte(bad)); err == nil {
 			t.Errorf("accepted:\n%s", bad)
@@ -205,7 +203,6 @@ func TestAFanoutsShapeIsChecked(t *testing.T) {
 	}
 	for _, good := range []string{
 		"type: command\ncommand: x\nfanout:\n  min: 2\n  max: 5\n  between: 'true'\n  until: agree\n",
-		"type: command\ncommand: x\nfanout:\n  min: 3\n  max: 5\n  prefer: 1\n",
 	} {
 		if err, _ := templates.YamlParse(v, []byte(good)); err != nil {
 			t.Errorf("refused %q: %v", good, err)
@@ -383,29 +380,4 @@ func (l *linkIsolator) Isolate(ctx context.Context, dir, name string) (Isolation
 		os.Symlink(filepath.Join(dir, "checks"), filepath.Join(iso.Dir(), "checks"))
 	}
 	return iso, nil
-}
-
-// A tie among the leaders goes to prefer; the checks still decide when they
-// favour one attempt, and an attempt that failed is never preferred.
-func TestATieGoesToThePreferredAttempt(t *testing.T) {
-	atts := []attempt{{n: 1, patch: "a longer change"}, {n: 2, patch: "short"}, {n: 3, patch: "shorter"}}
-	for _, c := range []struct {
-		name   string
-		points map[string]int
-		prefer int
-		want   int
-	}{
-		{"a tie, no preference: the smaller change", map[string]int{"1": 2, "2": 2, "3": 2}, 0, 2},
-		{"a tie: the preferred attempt", map[string]int{"1": 2, "2": 2, "3": 2}, 1, 1},
-		{"the checks favour another: they decide", map[string]int{"1": 1, "2": 2, "3": 2}, 1, 2},
-		{"the preferred attempt leads alone", map[string]int{"1": 3, "2": 2, "3": 2}, 1, 1},
-	} {
-		if w := winner(atts, c.points, c.prefer); w.n != c.want {
-			t.Errorf("%s: attempt %d, want %d", c.name, w.n, c.want)
-		}
-	}
-	failed := []attempt{{n: 1, err: fmt.Errorf("no change")}, {n: 2, patch: "bb"}, {n: 3, patch: "c"}}
-	if w := winner(failed, map[string]int{"1": 0, "2": 0, "3": 0}, 1); w.n != 3 {
-		t.Errorf("a failed preferred attempt: attempt %d, want 3", w.n)
-	}
 }

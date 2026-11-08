@@ -232,7 +232,7 @@ func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name
 		return "", fmt.Errorf("task %s: every attempt failed (%d): %s", name, len(atts), atts[len(atts)-1].err)
 	}
 	if f.Pick {
-		w := winner(atts, out.Points, f.Prefer)
+		w := winner(atts, out.Points)
 		ap, isApplier := b.Isolator.(Applier)
 		if !isApplier {
 			return "", fmt.Errorf("task %s: pick needs a host that applies a change, and this one does not", name)
@@ -399,37 +399,26 @@ func runCheck(ctx context.Context, dir, file string, env func() []string) bool {
 	return cmd.Run() == nil
 }
 
-// winner is the attempt with the most points. A tie goes to prefer when it is
-// among them, else to the smaller change. An attempt that failed counts only
-// when every one did. On SWE-bench Verified the smaller change lost two of
-// three ties where the first attempt was right (django-11815, 2026-11-08).
-func winner(atts []attempt, points map[string]int, prefer int) attempt {
-	var lead []*attempt
-	top := 0
+// winner is the attempt with the most points, a tie to the smaller change;
+// an attempt that failed counts only when every one did.
+func winner(atts []attempt, points map[string]int) attempt {
+	var best *attempt
 	for i := range atts {
 		a := &atts[i]
 		if a.err != nil {
 			continue
 		}
-		p := points[strconv.Itoa(a.n)]
-		switch {
-		case len(lead) == 0 || p > top:
-			lead, top = []*attempt{a}, p
-		case p == top:
-			lead = append(lead, a)
+		if best == nil {
+			best = a
+			continue
 		}
-	}
-	if len(lead) == 0 {
-		return atts[0]
-	}
-	best := lead[0]
-	for _, a := range lead {
-		if a.n == prefer {
-			return *a
-		}
-		if len(a.patch) < len(best.patch) {
+		pa, pb := points[strconv.Itoa(a.n)], points[strconv.Itoa(best.n)]
+		if pa > pb || (pa == pb && len(a.patch) < len(best.patch)) {
 			best = a
 		}
+	}
+	if best == nil {
+		best = &atts[0]
 	}
 	return *best
 }
