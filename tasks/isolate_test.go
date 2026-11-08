@@ -375,3 +375,31 @@ func TestPickNeedsAHostThatApplies(t *testing.T) {
 		t.Fatalf("events = %q", got)
 	}
 }
+
+// A check that finds the project from its own location judges the copy it
+// is run in: the engine runs it by its path inside that copy.
+func TestACheckThatLocatesItselfJudgesTheAttemptsCopy(t *testing.T) {
+	iso := &linkIsolator{}
+	root, r := runChecked(t, iso, func(string) map[string]string {
+		return map[string]string{"try": "type: command\nfanout:\n  min: 2\n  checks: [checks/*]\n  pick: true\ncommand: echo attempt {{.n}} > f.txt\n"}
+	}, map[string]string{"wants-2": "cd \"$(dirname \"$0\")/..\" && grep -q 'attempt 2' f.txt"})
+	if r.Winner != 2 || r.Checks != 1 {
+		t.Fatalf("result = %+v", r)
+	}
+	_ = root
+}
+
+// linkIsolator is applyIsolator whose copies link the run's checks/ in, as
+// Memdoor links the run's .memdoor into every worktree.
+type linkIsolator struct{ applyIsolator }
+
+func (l *linkIsolator) Isolate(ctx context.Context, dir, name string) (Isolation, error) {
+	iso, err := l.applyIsolator.Isolate(ctx, dir, name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "checks")); err == nil {
+		os.Symlink(filepath.Join(dir, "checks"), filepath.Join(iso.Dir(), "checks"))
+	}
+	return iso, nil
+}

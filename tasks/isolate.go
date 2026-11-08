@@ -351,9 +351,23 @@ func (b *Base) evaluate(ctx context.Context, d *templates.YamlTaskDefinition, na
 			m.points[a.n] = 0
 		}
 	}
+	// A check is run by its path inside the directory it judges: one under
+	// the run's directory (the run's folder, linked into every copy) is run
+	// from the copy's side, so a check that finds the project from its own
+	// location lands in that copy, not in the run's directory (a path check
+	// that did `cd $(dirname $0)/../../../..` tested the run's directory for
+	// every attempt, and failed all five, 2026-11-08).
+	inDir := func(dir, f string) string {
+		if rel, err := filepath.Rel(b.Dir, f); err == nil && !strings.HasPrefix(rel, "..") {
+			if in := filepath.Join(dir, rel); fileExists(in) {
+				return in
+			}
+		}
+		return f // a copy without the run's folder: the check as it is
+	}
 	for _, f := range files {
 		label := filepath.Base(f)
-		if runCheck(ctx, base.Dir(), f, b.Env) {
+		if runCheck(ctx, base.Dir(), inDir(base.Dir(), f), b.Env) {
 			m.ignored = append(m.ignored, label)
 			m.lines = append(m.lines, fmt.Sprintf("check %s: passes on the run's directory as it stands: proves nothing", label))
 			continue
@@ -365,7 +379,7 @@ func (b *Base) evaluate(ctx context.Context, d *templates.YamlTaskDefinition, na
 				continue
 			}
 			m.possible[a.n]++
-			if runCheck(ctx, a.iso.Dir(), f, b.Env) {
+			if runCheck(ctx, a.iso.Dir(), inDir(a.iso.Dir(), f), b.Env) {
 				m.points[a.n]++
 				m.lines = append(m.lines, fmt.Sprintf("check %s on %d: passes", label, a.n))
 			} else {
@@ -512,4 +526,9 @@ func clipEnd(s string) string {
 		return "[…]\n" + s[len(s)-maxBetween:]
 	}
 	return s
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
