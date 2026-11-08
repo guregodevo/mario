@@ -50,8 +50,14 @@ type Base struct {
 	// with; nil runs them with this process's. A caller that holds secrets
 	// its tasks must not see (a model key) answers its environment without
 	// them.
-	Env       func() []string
-	Outputs   Outputs // where outputs are kept when no target is named
+	Env     func() []string
+	Outputs Outputs // where outputs are kept when no target is named
+	// Isolator gives each attempt of a fan-out a working directory of its
+	// own; nil: a fan-out fails and says why.
+	Isolator Isolator
+	// Decider reads a fan-out's evidence against its `until`; nil: the
+	// `between` command's exit status settles it.
+	Decider   Decider
 	Partition string
 	Version   string
 }
@@ -108,62 +114,43 @@ func (b *Base) optional(name string) bool {
 
 // Fn is the task's run: Run under the definition's timeout, then the proof —
 // the target it named must exist, or the output is written where the
-// endpoint looks.
+// endpoint looks. A fan-out runs several attempts, each in a working
+// directory of its own.
 func (b *Base) Fn(name string) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		d, defined := b.Defs[name]
 		if !defined {
 			return fmt.Errorf("task %s is external: it is made outside this workflow, never run by it", name)
 		}
-		if d.Timeout != "" {
-			to, err := ParseTimeout(d.Timeout)
-			if err != nil {
-				return fmt.Errorf("task %s: timeout %q: %w", name, d.Timeout, err)
-			}
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, to)
-			defer cancel()
-		}
 		if strings.TrimSpace(d.When) != "" {
 			line, err := b.Render(d, d.When)
 			if err != nil {
 				return fmt.Errorf("task %s: when template: %w", name, err)
 			}
-			if err := shellCommand(ctx, b.Dir, line, b.Env).Run(); err != nil {
+			// The condition runs under the task's clock, as it always has.
+			wctx := ctx
+			if d.Timeout != "" {
+				if to, err := ParseTimeout(d.Timeout); err == nil {
+					var cancel context.CancelFunc
+					wctx, cancel = context.WithTimeout(ctx, to)
+					defer cancel()
+				}
+			}
+			if err := shellCommand(wctx, b.Dir, line, b.Env).Run(); err != nil {
 				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, shown(line)), "component", "workflow")
 				return b.Outputs.Write(name, b.Partition, "")
 			}
 		}
-		out, err := b.Run(ctx, b, d, name)
-		if err != nil {
-			// Its own clock ran out: say so, not the kill's "signal: killed".
-			if d.Timeout != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				// The target is the proof, the clock is not: a turn stopped
-				// at its timeout with its target there did the work (an
-				// agent that had changed the tree and kept polishing it
-				// ended 13 runs of 500 unchecked, 2026-11-06).
-				if HasTarget(d) && b.NewDataEndpoint(name).Exists() {
-					note := fmt.Sprintf("timed out after %s (its timeout); its target is there", d.Timeout)
-					logger.Log.Info(fmt.Sprintf("Task %s %s", name, note), "component", "workflow")
-					return b.Outputs.Write(name, b.Partition, note)
-				}
-				return fmt.Errorf("task %s timed out after %s (its timeout) and was stopped", name, d.Timeout)
-			}
-			return err
+		var out string
+		var err error
+		switch {
+		case d.Fanout != nil:
+			out, err = b.fanout(ctx, d, name)
+		default:
+			out, err = b.once(ctx, d, name)
 		}
-		if HasTarget(d) {
-			// The target is the proof: a run that returned without error but
-			// left no target behind did not do the work.
-			if ep := b.NewDataEndpoint(name); !ep.Exists() {
-				// Name the target as it was checked, rendered: a failure
-				// that printed the template ("file rules/{{.partition}}.md")
-				// sent a person looking for a file by that name (2026-10-07).
-				what := DescribeTarget(d)
-				if s, ok := ep.(fmt.Stringer); ok {
-					what = s.String()
-				}
-				return fmt.Errorf("task %s finished but its target is not there (%s)", name, what)
-			}
+		if err != nil {
+			return err
 		}
 		// The answer is kept either way, so a task after it can read it with
 		// {{ output "name" }}. With a target it is not the proof — the target
@@ -174,9 +161,67 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 	}
 }
 
+// once is one run of the task in b.Dir under its timeout, and its proof.
+func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name string) (string, error) {
+	if d.Timeout != "" {
+		to, err := ParseTimeout(d.Timeout)
+		if err != nil {
+			return "", fmt.Errorf("task %s: timeout %q: %w", name, d.Timeout, err)
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, to)
+		defer cancel()
+	}
+	out, err := b.Run(ctx, b, d, name)
+	if err != nil {
+		// Its own clock ran out: say so, not the kill's "signal: killed".
+		if d.Timeout != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			// The target is the proof, the clock is not: a turn stopped
+			// at its timeout with its target there did the work (an
+			// agent that had changed the tree and kept polishing it
+			// ended 13 runs of 500 unchecked, 2026-11-06).
+			if HasTarget(d) && b.targetEndpoint(name).Exists() {
+				note := fmt.Sprintf("timed out after %s (its timeout); its target is there", d.Timeout)
+				logger.Log.Info(fmt.Sprintf("Task %s %s", name, note), "component", "workflow")
+				return note, nil
+			}
+			return "", fmt.Errorf("task %s timed out after %s (its timeout) and was stopped", name, d.Timeout)
+		}
+		return "", err
+	}
+	if HasTarget(d) {
+		// The target is the proof: a run that returned without error but
+		// left no target behind did not do the work.
+		if ep := b.targetEndpoint(name); !ep.Exists() {
+			// Name the target as it was checked, rendered: a failure
+			// that printed the template ("file rules/{{.partition}}.md")
+			// sent a person looking for a file by that name (2026-10-07).
+			what := DescribeTarget(d)
+			if s, ok := ep.(fmt.Stringer); ok {
+				what = s.String()
+			}
+			return "", fmt.Errorf("task %s finished but its target is not there (%s)", name, what)
+		}
+	}
+	return out, nil
+}
+
 // NewDataEndpoint is the task's proof: the target its definition names, or
 // its output by convention — also for an external, whose maker writes there.
+// A fan-out's proof is its output: its target is about the copy each
+// attempt ran in (checked there, by once), and in the run's directory it
+// may hold before the task ever ran (an "uncommitted change" target holds in
+// any dirty tree), which would skip it.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
+	if d, known := b.Defs[name]; known && d.Fanout != nil {
+		return b.Outputs.Endpoint(name, b.Partition)
+	}
+	return b.targetEndpoint(name)
+}
+
+// targetEndpoint is the target the definition names, checked in b.Dir, or
+// its output when it names none.
+func (b *Base) targetEndpoint(name string) workflow.DataEndpoint {
 	d, known := b.Defs[name]
 	dir := b.Dir
 	if !known {

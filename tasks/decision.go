@@ -85,6 +85,9 @@ func runDecision(ctx context.Context, dec Decider, b *Base, d *templates.YamlTas
 	if strings.TrimSpace(d.Else) == "" {
 		return "", fmt.Errorf("task %s: a decision task needs an else, the task whose output answers without a decision model", name)
 	}
+	if dec == nil {
+		dec = b.Decider
+	}
 	threshold := d.Threshold
 	if threshold <= 0 || threshold > 1 {
 		threshold = DefaultDecisionThreshold

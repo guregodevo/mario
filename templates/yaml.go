@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/xeipuuv/gojsonschema"
 	yaml "gopkg.in/yaml.v2"
@@ -19,6 +20,29 @@ type RuntimeContext struct {
 	Name      string
 	Partition string
 }
+
+// YamlFanout is a task's fan-out: how many isolated attempts, and what
+// settles them.
+type YamlFanout struct {
+	Min     int    `yaml:"min"`
+	Max     int    `yaml:"max,omitempty"`
+	Between string `yaml:"between,omitempty"`
+	Until   string `yaml:"until,omitempty"`
+	// Checks are executables (glob patterns, templates) the engine runs in
+	// each attempt's directory after every wave: one that passes on the run's
+	// directory as it stands proves nothing and is not counted; an attempt
+	// scores a point per other check it passes. Own names an attempt's own
+	// check ({{.n}} in it), which never scores for it. Pick applies the
+	// attempt with the most points to the run's directory (a tie: the
+	// smaller change).
+	Checks []string `yaml:"checks,omitempty"`
+	Own    string   `yaml:"own,omitempty"`
+	Pick   bool     `yaml:"pick,omitempty"`
+}
+
+// MaxFanout bounds a fan-out: attempts are model turns, and a typo in max
+// must not run a hundred of them.
+const MaxFanout = 10
 
 // A struct to hold the YAML content, based on your YAML structure.
 type YamlTaskDefinition struct {
@@ -93,6 +117,12 @@ type YamlTaskDefinition struct {
 	Each []string `yaml:"each,omitempty"`
 	// Item is the one entry of Each this copy was made for.
 	Item string `yaml:"-"`
+	// Fanout runs the task several times, each in a working directory of its
+	// own the host makes (tasks.Isolator): Min attempts at once, then one
+	// more at a time until the attempts are settled (their checks, Between's
+	// exit status, or the host's decision model settling sooner), or Max is
+	// reached. Each attempt's change is in the task's output.
+	Fanout *YamlFanout `yaml:"fanout,omitempty"`
 
 	// Lazy renderer for the field (e.g., Prompt)
 	LazyRenderedField func() (string, error) `yaml:"-"`
@@ -258,9 +288,13 @@ func (d *YamlTaskDefinition) Expand() []*YamlTaskDefinition {
 
 func YamlParse(validator *YAMLValidator, yamlContent []byte) (error, *YamlTaskDefinition) {
 
-	forSchema, _, errEach := withoutEach(yamlContent)
+	forSchema, items, errEach := withoutEach(yamlContent)
 	if errEach != nil {
 		return errEach, nil
+	}
+	forSchema, errRun := withoutRunShape(forSchema, len(items) > 0)
+	if errRun != nil {
+		return errRun, nil
 	}
 	err, _ := validator.ValidateYAML(forSchema)
 
@@ -336,4 +370,67 @@ func (v *YAMLValidator) validateSchema(taskType string, documentLoader gojsonsch
 		return errors.New(errorFmt)
 	}
 	return nil
+}
+
+// withoutRunShape returns the YAML without its `fanout` key (how a task is
+// run, read by every type, listed by none of their schemas), checked: a
+// fan-out is bounded and not an each.
+func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(yamlContent, &doc); err != nil || doc == nil {
+		return yamlContent, nil
+	}
+	raw, fanned := doc["fanout"]
+	if !fanned {
+		return yamlContent, nil
+	}
+	{
+		if hasEach {
+			return nil, fmt.Errorf("fanout and each: one or the other (each names its copies, fanout counts them)")
+		}
+		m := map[string]interface{}{}
+		switch raw := raw.(type) {
+		case map[string]interface{}:
+			m = raw
+		case map[interface{}]interface{}:
+			for k, v := range raw {
+				m[fmt.Sprint(k)] = v
+			}
+		default:
+			return nil, fmt.Errorf("fanout: an object with min, and max, between, until, checks, own, pick")
+		}
+		for k := range m {
+			switch k {
+			case "min", "max", "between", "until", "checks", "own", "pick":
+			default:
+				return nil, fmt.Errorf("fanout: %q is not a field (min, max, between, until, checks, own, pick)", k)
+			}
+		}
+		min, okMin := m["min"].(int)
+		if !okMin || min < 1 || min > MaxFanout {
+			return nil, fmt.Errorf("fanout: min is a number from 1 to %d", MaxFanout)
+		}
+		if v, has := m["max"]; has {
+			max, okMax := v.(int)
+			if !okMax || max < min || max > MaxFanout {
+				return nil, fmt.Errorf("fanout: max is a number from min to %d", MaxFanout)
+			}
+		}
+		_, hasChecks := m["checks"]
+		if until, has := m["until"]; has && fmt.Sprint(until) != "" {
+			if b, _ := m["between"].(string); strings.TrimSpace(b) == "" && !hasChecks {
+				return nil, fmt.Errorf("fanout: until needs checks or between, the evidence it is judged on")
+			}
+		}
+		if hasChecks {
+			if _, ok := m["checks"].([]interface{}); !ok {
+				return nil, fmt.Errorf("fanout: checks is a list of executables (glob patterns)")
+			}
+		}
+		if _, has := m["own"]; has && !hasChecks {
+			return nil, fmt.Errorf("fanout: own names an attempt's own check among checks; there are none")
+		}
+	}
+	delete(doc, "fanout")
+	return yaml.Marshal(doc)
 }
