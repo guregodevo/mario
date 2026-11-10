@@ -98,12 +98,14 @@ type YamlTaskDefinition struct {
 	State     string  `yaml:"state,omitempty"`
 	Threshold float64 `yaml:"threshold,omitempty"`
 	Else      string  `yaml:"else,omitempty"`
-	// From, By and Prefer are a pick task's (tasks.Pick): the fan-out whose
-	// attempts it chooses from, the tasks it asks in order on a tie (each
-	// names an attempt), and the attempt that wins a tie none of them settles.
+	// From, By, Prefer and Skip are a pick task's (tasks.Pick): the fan-out
+	// whose attempts it chooses from, the tasks it asks in order on a tie
+	// (each names an attempt), the attempt that wins a tie none of them
+	// settles, and the pick tasks whose winners it leaves out.
 	From   string   `yaml:"from,omitempty"`
 	By     []string `yaml:"by,omitempty"`
 	Prefer int      `yaml:"prefer,omitempty"`
+	Skip   []string `yaml:"skip,omitempty"`
 	// Target says what proves the task done, when the factory cannot tell
 	// from the name alone: a file that must exist, or a command that must
 	// exit 0. A task is done when its target exists, never when its run says so.
