@@ -35,7 +35,9 @@ const (
 // so it applies nothing itself). The attempt with the most points wins. On
 // a tie among the leaders, each task in `by:` is asked in order: the first
 // whose output names one of the leaders decides (an attempt's number, the
-// first in its output). Then `prefer:`, then the smaller change. Every rule
+// first in its output). Then `prefer:`, then the smaller change. `skip:`
+// names earlier pick tasks of the same fan-out: their winners are left out,
+// so a second pick takes the next attempt by the same rules. Every rule
 // is a task of the DAG or a field of this one: a tie-breaker is any task,
 // required by this one, and one that is skipped or names no leader passes
 // the tie on.
@@ -67,10 +69,21 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 	if fo.Winner != 0 {
 		return "", fmt.Errorf("task %s: the fan-out %s already applied attempt %d (pick: true); a pick task reads a fan-out with pick: false", name, from, fo.Winner)
 	}
+	skipped := map[int]bool{}
+	for _, ref := range d.Skip {
+		said, err := b.Outputs.Read(b.sibling(name, strings.TrimSpace(ref)), b.Partition)
+		if err != nil {
+			continue
+		}
+		var p Picked
+		if json.Unmarshal([]byte(strings.TrimSpace(said)), &p) == nil && p.Winner != 0 {
+			skipped[p.Winner] = true
+		}
+	}
 	byN := map[int]fanoutAttempt{}
 	top, leaders := 0, []int{}
 	for _, a := range fo.Attempts {
-		if !a.OK {
+		if !a.OK || skipped[a.N] {
 			continue
 		}
 		byN[a.N] = a
@@ -81,6 +94,9 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 		case p == top:
 			leaders = append(leaders, a.N)
 		}
+	}
+	if len(leaders) == 0 && len(skipped) > 0 {
+		return "", fmt.Errorf("task %s: no attempt of %s is left once the winners of %s are skipped", name, from, strings.Join(d.Skip, ", "))
 	}
 	if len(leaders) == 0 {
 		return "", fmt.Errorf("task %s: every attempt of %s failed", name, from)
@@ -185,6 +201,7 @@ const pickSchema = `{
     "from": {"type": "string", "description": "The fan-out task whose attempts are chosen from, required by this one, with pick: false. A short name is a task of the same group."},
     "by": {"type": "array", "items": {"type": "string"}, "description": "Tasks asked in order on a tie, each required by this one: the first whose output names a leading attempt's number decides."},
     "prefer": {"type": "integer", "minimum": 1, "description": "The attempt that wins a tie no by task settles."},
+    "skip": {"type": "array", "items": {"type": "string"}, "description": "Earlier pick tasks of the same fan-out, each required by this one: their winners are left out, so this pick takes the next attempt by the same rules."},
     "table_description": {"type": "string"},
     "dataset_description": {"type": "string"},
     "field_descriptions": {"type": "object"},

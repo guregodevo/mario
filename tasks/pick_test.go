@@ -16,6 +16,12 @@ import (
 // f.txt, the pick's output, and the events.
 func runPicked(t *testing.T, files map[string]string, checks map[string]string) (string, Picked, []string) {
 	t.Helper()
+	return runPickedAs(t, "choose", files, checks)
+}
+
+// runPickedAs is runPicked with the output of the pick task named as.
+func runPickedAs(t *testing.T, as string, files map[string]string, checks map[string]string) (string, Picked, []string) {
+	t.Helper()
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "f.txt"), []byte("start\n"), 0o644)
 	os.MkdirAll(filepath.Join(root, "checks"), 0o755)
@@ -32,7 +38,7 @@ func runPicked(t *testing.T, files map[string]string, checks map[string]string) 
 	}
 	defs := writeDAG(t, root, reg, files)
 	seq := run(t, root, types, defs)
-	out, _ := Outputs{Dir: filepath.Join(root, "out")}.Read("wf.steps.choose", "2026-10-02")
+	out, _ := Outputs{Dir: filepath.Join(root, "out")}.Read("wf.steps."+as, "2026-10-02")
 	var p Picked
 	if out != "" {
 		if err := json.Unmarshal([]byte(out), &p); err != nil {
@@ -114,5 +120,33 @@ func TestAPicksShapeIsChecked(t *testing.T) {
 	}
 	if err, _ := templates.YamlParse(v, []byte("type: pick\nfrom: try\nby: [a, b]\nprefer: 1\n")); err != nil {
 		t.Errorf("refused a pick: %v", err)
+	}
+}
+
+// A second pick that skips the first takes the next attempt by the same
+// rules: the checks favour 2, so choose takes 2; again, with 2 left out,
+// ties 1 and 3 and takes prefer 1. The tree is reset between the two.
+func TestAPickThatSkipsAnEarlierPickTakesTheNextAttempt(t *testing.T) {
+	f, p, _ := runPickedAs(t, "again", map[string]string{
+		"try":    tryThree,
+		"choose": "type: pick\nfrom: try\nprefer: 1\nrequires:\n  - table_pattern: try\n",
+		"reset":  "type: command\ncommand: echo start > f.txt\nrequires:\n  - table_pattern: choose\n",
+		"again":  "type: pick\nfrom: try\nskip: [choose]\nprefer: 1\nrequires:\n  - table_pattern: reset\n  - table_pattern: choose\n  - table_pattern: try\n",
+	}, map[string]string{"wants-2": "grep -q 'attempt 2' f.txt"})
+	if p.Winner != 1 || p.By != PickedByPrefer || f != "attempt 1\n" || len(p.Leaders) != 2 {
+		t.Fatalf("picked %+v, f.txt %q", p, f)
+	}
+}
+
+// With every attempt but the skipped one failed, nothing is left: the pick
+// fails and says why, and the tree keeps what it had.
+func TestAPickWithNothingLeftAfterSkippingFails(t *testing.T) {
+	f, _, seq := runPickedAs(t, "again", map[string]string{
+		"try":    "type: command\nfanout:\n  min: 2\n  max: 2\n  checks: [checks/*]\ncommand: '[ {{.n}} = 1 ] && echo attempt 1 > f.txt'\n",
+		"choose": "type: pick\nfrom: try\nrequires:\n  - table_pattern: try\n",
+		"again":  "type: pick\nfrom: try\nskip: [choose]\nrequires:\n  - table_pattern: choose\n  - table_pattern: try\n",
+	}, nil)
+	if got := strings.Join(seq, " | "); !strings.Contains(got, "no attempt of") || f != "attempt 1\n" {
+		t.Fatalf("f.txt %q, events = %q", f, got)
 	}
 }
