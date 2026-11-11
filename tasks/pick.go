@@ -25,17 +25,32 @@ type Picked struct {
 
 // What decided a pick, when no `by` task did.
 const (
-	PickedByChecks  = "checks"
-	PickedByPrefer  = "prefer"
-	PickedBySmaller = "smaller change"
+	PickedByChecks    = "checks"
+	PickedByPrefer    = "prefer"
+	PickedBySmaller   = "smaller change"
+	PickedByConsensus = "consensus"
 )
+
+// TieRule is a pick's rule for a tie its by tasks leave (`tie:`); the
+// schema accepts only the rules below.
+type TieRule string
+
+// TieConsensus takes the leader whose change shares the most lines with the
+// other leaders' changes.
+const TieConsensus TieRule = "consensus"
+
+// scoreTolerance is how close two consensus scores are to count as equal: a
+// sum of fractions, compared after floating-point division.
+const scoreTolerance = 1e-9
 
 // Pick is the task type that chooses one attempt of a fan-out and applies
 // it to the run's directory. `from:` names the fan-out (with `pick: false`,
 // so it applies nothing itself). The attempt with the most points wins. On
 // a tie among the leaders, each task in `by:` is asked in order: the first
 // whose output names one of the leaders decides (an attempt's number, the
-// first in its output). Then `prefer:`, then the smaller change. `skip:`
+// first in its output). Then `tie: consensus`: the leader whose change
+// shares the most lines with the other leaders' changes. Then `prefer:`, then
+// the smaller change. `skip:`
 // names earlier pick tasks of the same fan-out: their winners are left out,
 // so a second pick takes the next attempt by the same rules. Every rule
 // is a task of the DAG or a field of this one: a tie-breaker is any task,
@@ -126,6 +141,13 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 				break
 			}
 		}
+		if out.Winner == 0 && TieRule(d.Tie) == TieConsensus {
+			if best := consensus(leaders, byN); len(best) == 1 {
+				out.Winner, out.By = best[0], PickedByConsensus
+			} else {
+				leaders = best
+			}
+		}
 		if out.Winner == 0 && isLeader(d.Prefer) {
 			out.Winner, out.By = d.Prefer, PickedByPrefer
 		}
@@ -168,6 +190,66 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 	return answer, nil
 }
 
+// consensus is the leaders whose change shares the most with the other
+// leaders' changes: the sum, over the others, of the share of changed lines
+// two changes have in common (added and removed lines, whitespace aside).
+// Right attempts tend to make the same change and wrong ones to differ: on
+// the SWE-bench Verified and LiveCodeBench runs where right and wrong
+// attempts tied, it took a right one where prefer took a wrong one three
+// times, and a wrong one where prefer was right once (two wrong attempts that
+// wrote the same change; DeepSeek V4.1 Flash, 2026-11-11).
+func consensus(leaders []int, byN map[int]fanoutAttempt) []int {
+	lines := map[int]map[string]bool{}
+	for _, n := range leaders {
+		lines[n] = changedLines(byN[n].Patch)
+	}
+	score := map[int]float64{}
+	for _, n := range leaders {
+		for _, m := range leaders {
+			if m == n {
+				continue
+			}
+			both, either := 0, len(lines[m])
+			for l := range lines[n] {
+				if lines[m][l] {
+					both++
+				} else {
+					either++
+				}
+			}
+			if either > 0 {
+				score[n] += float64(both) / float64(either)
+			}
+		}
+	}
+	top, best := -1.0, []int{}
+	for _, n := range leaders {
+		switch {
+		case score[n] > top+scoreTolerance:
+			top, best = score[n], []int{n}
+		case score[n] > top-scoreTolerance:
+			best = append(best, n)
+		}
+	}
+	return best
+}
+
+var spaces = regexp.MustCompile(`\s+`)
+
+// changedLines is a patch's added and removed lines, whitespace aside.
+func changedLines(patch string) map[string]bool {
+	out := map[string]bool{}
+	for _, l := range strings.Split(patch, "\n") {
+		if len(l) == 0 || (l[0] != '+' && l[0] != '-') || strings.HasPrefix(l, "+++") || strings.HasPrefix(l, "---") {
+			continue
+		}
+		if t := spaces.ReplaceAllString(l[1:], ""); t != "" {
+			out[l[:1]+t] = true
+		}
+	}
+	return out
+}
+
 // sibling is the full name of a task a short name refers to: a task of the
 // same group as name; a dotted name is any task.
 func (b *Base) sibling(name, ref string) string {
@@ -200,6 +282,7 @@ const pickSchema = `{
     "type": {"enum": ["pick"]},
     "from": {"type": "string", "description": "The fan-out task whose attempts are chosen from, required by this one, with pick: false. A short name is a task of the same group."},
     "by": {"type": "array", "items": {"type": "string"}, "description": "Tasks asked in order on a tie, each required by this one: the first whose output names a leading attempt's number decides."},
+    "tie": {"enum": ["consensus"], "description": "The rule for a tie no by task settles, before prefer: consensus takes the leader whose change shares the most lines with the other leaders' changes."},
     "prefer": {"type": "integer", "minimum": 1, "description": "The attempt that wins a tie no by task settles."},
     "skip": {"type": "array", "items": {"type": "string"}, "description": "Earlier pick tasks of the same fan-out, each required by this one: their winners are left out, so this pick takes the next attempt by the same rules."},
     "table_description": {"type": "string"},
