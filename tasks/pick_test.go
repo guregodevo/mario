@@ -150,3 +150,40 @@ func TestAPickWithNothingLeftAfterSkippingFails(t *testing.T) {
 		t.Fatalf("f.txt %q, events = %q", f, got)
 	}
 }
+
+func diffOf(lines ...string) string {
+	return "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// Consensus takes the leader whose change shares the most lines with the
+// others': two attempts that change the same line outweigh the odd one, and
+// whitespace does not count; equal scores stay tied.
+func TestConsensusTakesTheChangeTheOthersShare(t *testing.T) {
+	byN := map[int]fanoutAttempt{
+		1: {N: 1, OK: true, Patch: diffOf("-x = a", "+x = b", "+log(x)")},
+		2: {N: 2, OK: true, Patch: diffOf("-x = a", "+x  =  c")},
+		3: {N: 3, OK: true, Patch: diffOf("-x = a", "+x = c")},
+	}
+	if got := consensus([]int{1, 2, 3}, byN); len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Errorf("consensus = %v, want [2 3] (2 and 3 make the same change, whitespace aside)", got)
+	}
+	byN[3] = fanoutAttempt{N: 3, OK: true, Patch: diffOf("-x = a", "+x = c", "+check(x)")}
+	if got := consensus([]int{1, 2, 3}, byN); len(got) != 1 || got[0] != 2 {
+		t.Errorf("consensus = %v, want [2] (its change is the one the others share most)", got)
+	}
+}
+
+func TestAPicksTieIsChecked(t *testing.T) {
+	types := []Base{Command(), Pick()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	v := factory.NewValidator(reg)
+	if err, _ := templates.YamlParse(v, []byte("type: pick\nfrom: try\ntie: consensus\nprefer: 1\n")); err != nil {
+		t.Errorf("refused tie: consensus: %v", err)
+	}
+	if err, _ := templates.YamlParse(v, []byte("type: pick\nfrom: try\ntie: vote\n")); err == nil {
+		t.Errorf("accepted tie: vote")
+	}
+}

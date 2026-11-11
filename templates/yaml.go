@@ -98,12 +98,14 @@ type YamlTaskDefinition struct {
 	State     string  `yaml:"state,omitempty"`
 	Threshold float64 `yaml:"threshold,omitempty"`
 	Else      string  `yaml:"else,omitempty"`
-	// From, By, Prefer and Skip are a pick task's (tasks.Pick): the fan-out
-	// whose attempts it chooses from, the tasks it asks in order on a tie
-	// (each names an attempt), the attempt that wins a tie none of them
-	// settles, and the pick tasks whose winners it leaves out.
+	// From, By, Tie, Prefer and Skip are a pick task's (tasks.Pick): the
+	// fan-out whose attempts it chooses from, the tasks it asks in order on
+	// a tie (each names an attempt), the rule it applies to a tie they leave
+	// (consensus), the attempt that wins a tie none of them settles, and the
+	// pick tasks whose winners it leaves out.
 	From   string   `yaml:"from,omitempty"`
 	By     []string `yaml:"by,omitempty"`
+	Tie    string   `yaml:"tie,omitempty"`
 	Prefer int      `yaml:"prefer,omitempty"`
 	Skip   []string `yaml:"skip,omitempty"`
 	// Target says what proves the task done, when the factory cannot tell
