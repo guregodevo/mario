@@ -119,6 +119,7 @@ type fanoutResult struct {
 	// as it stood (ignored), and the attempt picked.
 	Checks  int            `json:"checks,omitempty"`
 	Points  map[string]int `json:"points,omitempty"`
+	Fails   map[string]int `json:"fails,omitempty"`
 	Matrix  []string       `json:"matrix,omitempty"`
 	Ignored []string       `json:"ignored,omitempty"`
 	Winner  int            `json:"winner,omitempty"`
@@ -202,7 +203,7 @@ func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name
 			if m, err = b.evaluate(ctx, d, name, atts, base); err != nil {
 				return "", err
 			}
-			out.Checks, out.Points, out.Matrix, out.Ignored = m.checks, m.pointsByName(), m.lines, m.ignored
+			out.Checks, out.Points, out.Fails, out.Matrix, out.Ignored = m.checks, m.pointsByName(), m.failsByName(), m.lines, m.ignored
 		}
 		settled, by, p, printed, err := b.settled(ctx, d, name, withChecks, m)
 		if err != nil {
@@ -232,7 +233,7 @@ func (b *Base) fanout(ctx context.Context, d *templates.YamlTaskDefinition, name
 		return "", fmt.Errorf("task %s: every attempt failed (%d): %s", name, len(atts), atts[len(atts)-1].err)
 	}
 	if f.Pick {
-		w := winner(atts, out.Points)
+		w := winner(atts, out.Fails)
 		ap, isApplier := b.Isolator.(Applier)
 		if !isApplier {
 			return "", fmt.Errorf("task %s: pick needs a host that applies a change, and this one does not", name)
@@ -269,6 +270,23 @@ func (m matrix) pointsByName() map[string]int {
 	return out
 }
 
+// fails is the checks an attempt fails among those it is scored on. The
+// attempts are ranked by it, fewest first, not by the checks they pass: an
+// attempt is never scored on its own check, so one that writes no check is
+// scored on one more than the others and led on points alone
+// (django-11400, SWE-bench Verified, 2026-11-12: 5 points to 4, every
+// attempt passing every check it was scored on; on 106 runs with every
+// attempt graded the pick went from 92 right to 93, none lost).
+func (m matrix) fails(n int) int { return m.possible[n] - m.points[n] }
+
+func (m matrix) failsByName() map[string]int {
+	out := make(map[string]int, len(m.points))
+	for _, n := range m.attempted {
+		out[strconv.Itoa(n)] = m.fails(n)
+	}
+	return out
+}
+
 // settledByChecks: no check tells the attempts apart, one leads, or every
 // attempt passes every check that is not its own (a unanimous tie another
 // attempt cannot break).
@@ -276,25 +294,22 @@ func (m matrix) settledByChecks() (bool, string) {
 	if m.checks == 0 {
 		return true, "no check fails on the run's directory as it stands"
 	}
-	top, atTop, unanimous := -1, 0, true
+	fewest, atTop := -1, 0
 	for _, n := range m.attempted {
-		p := m.points[n]
-		if p > top {
-			top, atTop = p, 1
-		} else if p == top {
+		f := m.fails(n)
+		if fewest < 0 || f < fewest {
+			fewest, atTop = f, 1
+		} else if f == fewest {
 			atTop++
-		}
-		if p != m.possible[n] {
-			unanimous = false
 		}
 	}
 	if atTop == 1 {
 		return true, "one attempt leads"
 	}
-	if unanimous {
+	if fewest == 0 && atTop == len(m.attempted) {
 		return true, "every attempt passes every other check"
 	}
-	return false, fmt.Sprintf("%d attempts tie at %d points", atTop, top)
+	return false, fmt.Sprintf("%d attempts tie at %d failed checks", atTop, fewest)
 }
 
 // checkTimeout bounds one check on one attempt.
@@ -382,7 +397,11 @@ func (b *Base) evaluate(ctx context.Context, d *templates.YamlTaskDefinition, na
 	for _, n := range m.attempted {
 		pts = append(pts, fmt.Sprintf("%d %d", n, m.points[n]))
 	}
-	m.lines = append(m.lines, fmt.Sprintf("attempts: %d; checks that fail on the run's directory as it stands: %d; points: %s", len(m.attempted), m.checks, strings.Join(pts, ", ")))
+	var fl []string
+	for _, n := range m.attempted {
+		fl = append(fl, fmt.Sprintf("%d %d", n, m.fails(n)))
+	}
+	m.lines = append(m.lines, fmt.Sprintf("attempts: %d; checks that fail on the run's directory as it stands: %d; points: %s; failed: %s", len(m.attempted), m.checks, strings.Join(pts, ", "), strings.Join(fl, ", ")))
 	return m, nil
 }
 
@@ -399,9 +418,9 @@ func runCheck(ctx context.Context, dir, file string, env func() []string) bool {
 	return cmd.Run() == nil
 }
 
-// winner is the attempt with the most points, a tie to the smaller change;
-// an attempt that failed counts only when every one did.
-func winner(atts []attempt, points map[string]int) attempt {
+// winner is the attempt that fails the fewest checks, a tie to the smaller
+// change; an attempt that failed counts only when every one did.
+func winner(atts []attempt, fails map[string]int) attempt {
 	var best *attempt
 	for i := range atts {
 		a := &atts[i]
@@ -412,8 +431,8 @@ func winner(atts []attempt, points map[string]int) attempt {
 			best = a
 			continue
 		}
-		pa, pb := points[strconv.Itoa(a.n)], points[strconv.Itoa(best.n)]
-		if pa > pb || (pa == pb && len(a.patch) < len(best.patch)) {
+		fa, fb := fails[strconv.Itoa(a.n)], fails[strconv.Itoa(best.n)]
+		if fa < fb || (fa == fb && len(a.patch) < len(best.patch)) {
 			best = a
 		}
 	}

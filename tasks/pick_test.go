@@ -187,3 +187,23 @@ func TestAPicksTieIsChecked(t *testing.T) {
 		t.Errorf("accepted tie: vote")
 	}
 }
+
+// An attempt that writes no check of its own is scored on one check more than
+// the others, and led on points alone; ranked by the checks they fail, the
+// three tie and the tie goes on (django-11400, 2026-11-12).
+func TestAnAttemptWithNoCheckOfItsOwnDoesNotLeadByIt(t *testing.T) {
+	f, p, _ := runPicked(t, map[string]string{
+		"try":    "type: command\nfanout:\n  min: 3\n  max: 3\n  checks: [checks/*]\n  own: checks/own-{{.n}}\n  pick: false\ncommand: echo attempt {{.n}} > f.txt\n",
+		"choose": "type: pick\nfrom: try\nprefer: 2\nrequires:\n  - table_pattern: try\n",
+	}, map[string]string{
+		"path":  "grep -q attempt f.txt",
+		"own-2": "grep -q attempt f.txt",
+		"own-3": "grep -q attempt f.txt",
+	})
+	if p.Points["1"] <= p.Points["2"] {
+		t.Fatalf("points %v: attempt 1 should be scored on more checks than 2", p.Points)
+	}
+	if len(p.Leaders) != 3 || p.Winner != 2 || p.By != PickedByPrefer || f != "attempt 2\n" {
+		t.Fatalf("picked %+v, f.txt %q: want the three tied at 0 failed checks and prefer 2", p, f)
+	}
+}
