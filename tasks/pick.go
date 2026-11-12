@@ -21,6 +21,7 @@ type Picked struct {
 	By      string         `json:"by"`
 	Leaders []int          `json:"leaders"`
 	Points  map[string]int `json:"points,omitempty"`
+	Fails   map[string]int `json:"fails,omitempty"`
 }
 
 // What decided a pick, when no `by` task did.
@@ -45,7 +46,7 @@ const scoreTolerance = 1e-9
 
 // Pick is the task type that chooses one attempt of a fan-out and applies
 // it to the run's directory. `from:` names the fan-out (with `pick: false`,
-// so it applies nothing itself). The attempt with the most points wins. On
+// so it applies nothing itself). The attempt that fails the fewest checks wins. On
 // a tie among the leaders, each task in `by:` is asked in order: the first
 // whose output names one of the leaders decides (an attempt's number, the
 // first in its output). Then `tie: consensus`: the leader whose change
@@ -96,17 +97,23 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 		}
 	}
 	byN := map[int]fanoutAttempt{}
+	// The leaders fail the fewest checks (isolate.go, fails). A fan-out
+	// output from before fails has only points: the most points lead.
+	rank := func(n int) int { return -fo.Points[strconv.Itoa(n)] }
+	if fo.Fails != nil {
+		rank = func(n int) int { return fo.Fails[strconv.Itoa(n)] }
+	}
 	top, leaders := 0, []int{}
 	for _, a := range fo.Attempts {
 		if !a.OK || skipped[a.N] {
 			continue
 		}
 		byN[a.N] = a
-		p := fo.Points[strconv.Itoa(a.N)]
+		r := rank(a.N)
 		switch {
-		case len(leaders) == 0 || p > top:
-			top, leaders = p, []int{a.N}
-		case p == top:
+		case len(leaders) == 0 || r < top:
+			top, leaders = r, []int{a.N}
+		case r == top:
 			leaders = append(leaders, a.N)
 		}
 	}
@@ -117,7 +124,7 @@ func runPick(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, name
 		return "", fmt.Errorf("task %s: every attempt of %s failed", name, from)
 	}
 	sort.Ints(leaders)
-	out := Picked{Leaders: leaders, Points: fo.Points}
+	out := Picked{Leaders: leaders, Points: fo.Points, Fails: fo.Fails}
 	isLeader := func(n int) bool {
 		for _, l := range leaders {
 			if l == n {
@@ -276,7 +283,7 @@ func firstNumber(s string) (int, bool) {
 }
 
 const pickSchema = `{
-  "description": "Chooses one attempt of a fan-out and applies it: the most points on the checks, a tie to the first by task that names a leader, then prefer, then the smaller change",
+  "description": "Chooses one attempt of a fan-out and applies it: the fewest failed checks, a tie to the first by task that names a leader, then prefer, then the smaller change",
   "type": "object",
   "properties": {
     "type": {"enum": ["pick"]},

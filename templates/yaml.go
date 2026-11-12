@@ -33,8 +33,8 @@ type YamlFanout struct {
 	// directory as it stands proves nothing and is not counted; an attempt
 	// scores a point per other check it passes. Own names an attempt's own
 	// check ({{.n}} in it), which never scores for it. Pick applies the
-	// attempt with the most points to the run's directory (a tie: the
-	// smaller change).
+	// attempt that fails the fewest of the checks it is scored on to the
+	// run's directory (a tie: the smaller change).
 	Checks []string `yaml:"checks,omitempty"`
 	Own    string   `yaml:"own,omitempty"`
 	Pick   bool     `yaml:"pick,omitempty"`
