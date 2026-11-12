@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/guregodevo/mario/templates"
@@ -62,16 +63,28 @@ const maxArgLine = 100_000
 func shellCommand(ctx context.Context, dir, line string, env func() []string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if len(line) > maxArgLine {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-s")
+		cmd = exec.CommandContext(ctx, posixShell(), "-s")
 		cmd.Stdin = strings.NewReader(line)
 	} else {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", line)
+		cmd = exec.CommandContext(ctx, posixShell(), "-c", line)
 	}
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = env()
 	}
 	return cmd
+}
+
+// posixShell is /bin/sh, or on Windows the sh on the PATH (Git for Windows
+// ships one): a Windows process has no /bin/sh to start.
+func posixShell() string {
+	if runtime.GOOS != "windows" {
+		return "/bin/sh"
+	}
+	if p, err := exec.LookPath("sh"); err == nil {
+		return p
+	}
+	return "sh"
 }
 
 // shown is line as a message names it: the first 200 bytes, then its length.
