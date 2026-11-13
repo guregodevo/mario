@@ -135,7 +135,8 @@ const commonDefinitions = `{
           "table_pattern": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "The task required, by name."},
           "project_id": {"type": "string", "description": "Another workflow (default: this one)."},
           "dataset_id": {"type": "string", "description": "Another group (default: this task's)."},
-          "external": {"type": "boolean", "description": "Made outside this workflow: never run, only checked."}
+          "external": {"type": "boolean", "description": "Made outside this workflow: never run, only checked."},
+          "with": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Args of the required task, bound when a host pulls its workflow into this one: Go templates."}
         },
         "required": ["table_pattern"],
         "additionalProperties": false

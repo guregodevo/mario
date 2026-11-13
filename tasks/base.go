@@ -318,7 +318,23 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 		}
 		return string(data), nil
 	}
-	t, err := template.New(d.Name).Funcs(funcs).Parse(text)
+	// An arg's value is a template too, rendered once over the same args and funcs: a workflow that pulls
+	// another in binds that one's args to its own outputs (`dir: '{{ output "ship.steps.handoff" }}'`).
+	for k, v := range d.Args {
+		if !strings.Contains(v, "{{") {
+			continue
+		}
+		out, err := execute(d.Name+"."+k, v, funcs, vars)
+		if err != nil {
+			return "", fmt.Errorf("arg %s: %w", k, err)
+		}
+		vars[k] = out
+	}
+	return execute(d.Name, text, funcs, vars)
+}
+
+func execute(name, text string, funcs template.FuncMap, vars map[string]interface{}) (string, error) {
+	t, err := template.New(name).Funcs(funcs).Parse(text)
 	if err != nil {
 		return "", err
 	}
