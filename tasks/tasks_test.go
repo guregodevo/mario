@@ -16,6 +16,7 @@ import (
 	"github.com/guregodevo/mario/scheduler"
 	"github.com/guregodevo/mario/static"
 	"github.com/guregodevo/mario/templates"
+	"gopkg.in/yaml.v2"
 )
 
 type echoModel struct{ calls []string }
@@ -534,5 +535,39 @@ func TestAFailedOptionalTaskIsPassedOver(t *testing.T) {
 				t.Fatalf("%s: after read an empty plan: %q, %v", c.name, out, err)
 			}
 		}
+	}
+}
+
+// An arg's value is a Go template: it reads an upstream output and the partition, and the prompt that
+// uses the arg gets the rendered value. This is how a composing workflow binds another's inputs.
+func TestAnArgIsATemplateOverOutputsAndPartition(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"where": "type: command\ncommand: printf /tmp/wt-7\n",
+		"use":   "type: llm\nprompt: \"work in {{.dir}}\"\nargs:\n  dir: '{{ output \"where\" }}'\nrequires:\n  - table_pattern: where\n",
+	})
+	seq := strings.Join(run(t, root, types, defs), " | ")
+	if !strings.HasSuffix(seq, "done use") {
+		t.Fatalf("events = %q", seq)
+	}
+	if len(model.calls) != 1 || model.calls[0] != ": work in /tmp/wt-7" {
+		t.Fatalf("the arg was not rendered: %q", model.calls)
+	}
+}
+
+// with: on a requirement is read from the YAML and kept on the requirement.
+func TestARequirementCarriesWith(t *testing.T) {
+	var d templates.YamlTaskDefinition
+	if err := yaml.Unmarshal([]byte("type: command\nrequires:\n  - project_id: pr\n    table_pattern: open\n    with:\n      dir: '{{ output \"x.steps.y\" }}'\n"), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Requires) != 1 || d.Requires[0].With["dir"] != `{{ output "x.steps.y" }}` {
+		t.Fatalf("requires = %+v", d.Requires)
 	}
 }

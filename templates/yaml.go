@@ -156,6 +156,10 @@ type Requires struct {
 	StartDate        string   `yaml:"start_date,omitempty"`
 	StopDate         string   `yaml:"stop_date,omitempty"`
 	External         bool     `yaml:"external"`
+	// With binds the required task's args when its workflow is pulled into this one: the values are Go
+	// templates, rendered when that task runs (`dir: '{{ output "ship.steps.handoff" }}'`). A host that
+	// composes workflows applies them; mario carries them.
+	With map[string]string `yaml:"with,omitempty"`
 }
 
 func NewRequires(ProjectID, DatasetId, TablePattern string) Requires {
