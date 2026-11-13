@@ -86,6 +86,8 @@ type YamlTaskDefinition struct {
 	// Agent names who runs the task when the type is run by an agent (a
 	// coding agent, a reviewer): the factory for that type reads it.
 	Agent string `yaml:"agent,omitempty"`
+	// Text is what a template task renders: its answer, and with target.file, that file.
+	Text string `yaml:"text,omitempty"`
 	// Command is what a command task runs (a shell line, a Go template over
 	// args and partition like the prompt).
 	Command string `yaml:"command,omitempty"`
@@ -125,6 +127,10 @@ type YamlTaskDefinition struct {
 	// its templates (prompt, command, when, target). Without it nothing
 	// changes. It is read before the type's schema, so no type has to list it.
 	Each []string `yaml:"each,omitempty"`
+	// Dir is where the task works: its command, its when, its target and the files its templates read. A
+	// Go template like the command, relative to the run's directory; empty, the run's directory. Like
+	// Each it is read before the type's schema, so no type has to list it.
+	Dir string `yaml:"dir,omitempty"`
 	// Item is the one entry of Each this copy was made for.
 	Item string `yaml:"-"`
 	// Fanout runs the task several times, each in a working directory of its
@@ -242,16 +248,25 @@ func YamlSerialize(task *YamlTaskDefinition) ([]byte, error) {
 // itemName is what an `each` entry may be: it ends up in a task's name.
 var itemName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
-// withoutEach returns the YAML without its top-level `each` key (for the
-// type's schema, which does not list it) and the entries, checked.
+// withoutEach returns the YAML without its top-level `each` and `dir` keys (for the type's schema, which
+// lists neither: mario reads them for every type) and the entries of each, checked.
 func withoutEach(yamlContent []byte) ([]byte, []string, error) {
 	var doc map[string]interface{}
 	if err := yaml.Unmarshal(yamlContent, &doc); err != nil || doc == nil {
 		return yamlContent, nil, nil // not a mapping: the validator reports it
 	}
+	dir, hasDir := doc["dir"]
+	if _, isText := dir.(string); hasDir && !isText {
+		return nil, nil, fmt.Errorf("dir: a path, e.g. dir: '{{.dir}}'")
+	}
 	raw, ok := doc["each"]
 	if !ok {
-		return yamlContent, nil, nil
+		if !hasDir {
+			return yamlContent, nil, nil
+		}
+		delete(doc, "dir")
+		rest, err := yaml.Marshal(doc)
+		return rest, nil, err
 	}
 	list, ok := raw.([]interface{})
 	if !ok || len(list) == 0 {
@@ -271,6 +286,7 @@ func withoutEach(yamlContent []byte) ([]byte, []string, error) {
 		items = append(items, item)
 	}
 	delete(doc, "each")
+	delete(doc, "dir")
 	rest, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, nil, err

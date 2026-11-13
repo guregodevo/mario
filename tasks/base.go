@@ -60,6 +60,8 @@ type Base struct {
 	Decider   Decider
 	Partition string
 	Version   string
+	// inDir says Dir is already the task's own dir (Fn moved there), so a target is not moved twice.
+	inDir bool
 }
 
 // Bind answers a copy tied to one run: its definitions, directory, outputs,
@@ -122,6 +124,16 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		if !defined {
 			return fmt.Errorf("task %s is external: it is made outside this workflow, never run by it", name)
 		}
+		// A task with a dir works there: its when, its run and its target.
+		if strings.TrimSpace(d.Dir) != "" {
+			dir, err := b.dirOf(d)
+			if err != nil {
+				return fmt.Errorf("task %s: dir: %w", name, err)
+			}
+			bb := *b
+			bb.Dir, bb.inDir = dir, true
+			b = &bb
+		}
 		if strings.TrimSpace(d.When) != "" {
 			line, err := b.Render(d, d.When)
 			if err != nil {
@@ -138,6 +150,7 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			}
 			if err := shellCommand(wctx, b.Dir, line, b.Env).Run(); err != nil {
 				logger.Log.Info(fmt.Sprintf("Skipping task %s: its condition does not hold (when: %s)", name, shown(line)), "component", "workflow")
+				_ = b.Outputs.WriteStatus(name, b.Partition, StatusSkipped)
 				return b.Outputs.Write(name, b.Partition, "")
 			}
 		}
@@ -150,8 +163,10 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 			out, err = b.once(ctx, d, name)
 		}
 		if err != nil {
+			_ = b.Outputs.WriteStatus(name, b.Partition, StatusFailed)
 			return err
 		}
+		_ = b.Outputs.WriteStatus(name, b.Partition, StatusDone)
 		// The answer is kept either way, so a task after it can read it with
 		// {{ output "name" }}. With a target it is not the proof — the target
 		// is — only what the task said. Dropping it failed every downstream
@@ -159,6 +174,31 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		// there", a run 2026-10-04).
 		return b.Outputs.Write(name, b.Partition, out)
 	}
+}
+
+// How a task ended, kept beside its output (Outputs.WriteStatus) for the `status` template function.
+const (
+	StatusDone    = "done"
+	StatusFailed  = "failed"
+	StatusSkipped = "skipped"
+)
+
+// dirOf is where a task works: its dir rendered, relative to the run's directory, else the run's directory.
+func (b *Base) dirOf(d *templates.YamlTaskDefinition) (string, error) {
+	if strings.TrimSpace(d.Dir) == "" {
+		return b.Dir, nil
+	}
+	dir, err := b.Render(d, d.Dir)
+	if err != nil {
+		return "", err
+	}
+	if dir = strings.TrimSpace(dir); dir == "" {
+		return b.Dir, nil
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(b.Dir, dir)
+	}
+	return dir, nil
 }
 
 // once is one run of the task in b.Dir under its timeout, and its proof.
@@ -224,6 +264,12 @@ func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
 func (b *Base) targetEndpoint(name string) workflow.DataEndpoint {
 	d, known := b.Defs[name]
 	dir := b.Dir
+	if known && !b.inDir && strings.TrimSpace(d.Dir) != "" {
+		// Checked where the task works. A dir that cannot be rendered yet (an output not made) is the run's.
+		if own, err := b.dirOf(d); err == nil {
+			dir = own
+		}
+	}
 	if !known {
 		d, known = b.Externals[name]
 		if ext, ok := b.ExternalDirs[name]; ok && ext != "" {
@@ -304,6 +350,23 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 			return "", fmt.Errorf("output of %s is not there (is it required by this task?): %w", full, err)
 		}
 		return out, nil
+	}
+	// `status "test"` is how a task of this run ended: done, failed or skipped; empty when it has not. A
+	// template ticks a box from it: {{ if eq (status "checks-test") "done" }}[x]{{ else }}[ ]{{ end }}.
+	funcs["status"] = func(name string) string {
+		full := name
+		if !strings.Contains(name, ".") {
+			full = seg[0] + "." + seg[1] + "." + name
+		}
+		return b.Outputs.ReadStatus(full, b.Partition)
+	}
+	funcs["trim"] = strings.TrimSpace
+	// `default "none" .x` is .x, or "none" when .x is empty.
+	funcs["default"] = func(fallback string, v interface{}) string {
+		if s := strings.TrimSpace(fmt.Sprint(v)); v != nil && s != "" && s != "<no value>" {
+			return fmt.Sprint(v)
+		}
+		return fallback
 	}
 	// `file "x.diff"` puts a file of the project in the text, as it is when
 	// the task runs: what a command before it wrote, read by a model call

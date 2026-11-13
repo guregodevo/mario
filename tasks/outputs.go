@@ -93,3 +93,21 @@ func (e *commandEndpoint) Exists() bool {
 	defer cancel()
 	return shellCommand(ctx, e.dir, e.command, e.env).Run() == nil
 }
+
+// WriteStatus keeps how a task ended for one partition: done, failed or skipped.
+func (o Outputs) WriteStatus(name, partition, status string) error {
+	p := o.Path(name, partition) + ".status"
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(status), 0o644)
+}
+
+// ReadStatus answers how a task ended for one partition; empty when it has not.
+func (o Outputs) ReadStatus(name, partition string) string {
+	b, err := os.ReadFile(o.Path(name, partition) + ".status")
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
