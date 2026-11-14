@@ -14,6 +14,10 @@ import (
 // definition — rather than exiting the process: a library reports, the
 // program decides.
 func BuildDAG(version string, partition, component string, repository workflow.WorkflowRepository, taskDefs map[string]*templates.YamlTaskDefinition, reg Component) (map[string]workflow.WorkflowInstanceId, error) {
+	// No run without a compile: what can be told wrong before a run is refused here, all of it at once.
+	if err := templates.YamlTaskDefinitions(taskDefs).Compile(); err != nil {
+		return nil, err
+	}
 	tasks := make(map[string]workflow.WorkflowInstanceId, 0)
 	for _, taskDef := range taskDefs {
 		f, ok := reg.Get(taskDef.Type)

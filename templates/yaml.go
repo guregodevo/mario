@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/template"
+	"text/template/parse"
 
 	"github.com/xeipuuv/gojsonschema"
 	yaml "gopkg.in/yaml.v2"
@@ -656,4 +658,171 @@ func (d *YamlTaskDefinition) Bind(arg, value string) bool {
 	}
 	d.Args[arg] = value
 	return true
+}
+
+// CompileError is one thing wrong with a task that can be told before a run: where it is, what is wrong,
+// and what to write instead. Its text is meant for whoever wrote the file, a person or a model.
+type CompileError struct {
+	Task    string // <workflow>.<group>.<task>
+	File    string // <group>/<task>.yaml, under the workflow's directory
+	Field   string // the YAML key the problem is in: command, when, target.file, args.dir ...
+	Problem string
+	Fix     string
+}
+
+func (e CompileError) Error() string {
+	return fmt.Sprintf("%s: %s: %s. %s", e.File, e.Field, e.Problem, e.Fix)
+}
+
+// Compile checks every task before a run and answers everything it found, joined. factory.BuildDAG calls
+// it, so a graph is never built, and nothing runs, from a workflow that does not compile. A workflow's author
+// fixes them in one pass instead of one failed run each. Nothing is checked that needs the run: an
+// output's content, a file's existence.
+//
+// Checked now: every template parses, and a template uses only args its task declares. An undeclared
+// {{.name}} does not fail at run time, it renders "<no value>" into the command.
+func (defs YamlTaskDefinitions) Compile() error {
+	names := make([]string, 0, len(defs))
+	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var found []error
+	for _, name := range names {
+		for _, e := range defs[name].compile() {
+			found = append(found, e)
+		}
+	}
+	return errors.Join(found...)
+}
+
+// field is one templated field of a task, by the YAML key a person reads.
+type field struct {
+	Key  string
+	Text string
+}
+
+// fields is the task's Go templates, in the order they read in the file.
+func (d *YamlTaskDefinition) fields() []field {
+	out := []field{
+		{"prompt", d.Prompt}, {"system", d.System}, {"command", d.Command}, {"text", d.Text},
+		{"condition", d.Condition}, {"state", d.State}, {"when", d.When},
+	}
+	if d.Target != nil {
+		out = append(out, field{"target.file", d.Target.File}, field{"target.command", d.Target.Command})
+	}
+	if d.Fanout != nil {
+		out = append(out, field{"fanout.between", d.Fanout.Between}, field{"fanout.until", d.Fanout.Until})
+	}
+	args := make([]string, 0, len(d.Args))
+	for arg := range d.Args {
+		args = append(args, arg)
+	}
+	sort.Strings(args)
+	for _, arg := range args {
+		out = append(out, field{"args." + arg, d.Args[arg]})
+	}
+	return out
+}
+
+// compile is what Compile finds in one task.
+func (d *YamlTaskDefinition) compile() []CompileError {
+	seg := strings.SplitN(d.Name, ".", 3)
+	for len(seg) < 3 {
+		seg = append(seg, "")
+	}
+	vars, funcs, err := ArgsOnly(d, "", seg[0], seg[1], seg[2])
+	if err != nil {
+		return nil
+	}
+	if d.Fanout != nil {
+		vars["n"] = "" // a fan-out's attempts are numbered: mario gives each its {{.n}}
+	}
+	declared := make([]string, 0, len(vars))
+	for name := range vars {
+		declared = append(declared, name)
+	}
+	sort.Strings(declared)
+	at := CompileError{Task: d.Name, File: seg[1] + "/" + strings.TrimSuffix(seg[2], "-"+d.Item) + ".yaml"}
+	var found []CompileError
+	for _, f := range d.fields() {
+		if !strings.Contains(f.Text, "{{") {
+			continue
+		}
+		e := at
+		e.Field = f.Key
+		tree, err := template.New(d.Name).Funcs(funcs).Parse(f.Text)
+		if err != nil {
+			e.Problem = "the template does not parse (" + strings.TrimPrefix(err.Error(), "template: "+d.Name+":") + ")"
+			e.Fix = "Close every {{ with }}, quote strings with \", and call a function as {{ name arg }}"
+			found = append(found, e)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, arg := range usedArgs(tree.Tree.Root) {
+			if _, ok := vars[arg]; ok || seen[arg] {
+				continue
+			}
+			seen[arg] = true
+			e.Problem = fmt.Sprintf("uses {{.%s}}, an arg this task does not declare; it would render <no value>", arg)
+			e.Fix = fmt.Sprintf("Declare it in this file under args: (%s: \"\"), or use one that is declared: %s", arg, strings.Join(declared, ", "))
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+// usedArgs is the top-level names a template reads from its data: {{.name}} and {{$.name}}. Inside
+// {{range}} and {{with}} the dot is something else, so their bodies are read for {{$.name}} only.
+func usedArgs(node parse.Node) []string {
+	var out []string
+	var walk func(n parse.Node, dot bool)
+	walk = func(n parse.Node, dot bool) {
+		switch n := n.(type) {
+		case *parse.ListNode:
+			if n == nil {
+				return
+			}
+			for _, c := range n.Nodes {
+				walk(c, dot)
+			}
+		case *parse.ActionNode:
+			walk(n.Pipe, dot)
+		case *parse.PipeNode:
+			if n == nil {
+				return
+			}
+			for _, c := range n.Cmds {
+				walk(c, dot)
+			}
+		case *parse.CommandNode:
+			for _, a := range n.Args {
+				walk(a, dot)
+			}
+		case *parse.FieldNode:
+			if dot && len(n.Ident) > 0 {
+				out = append(out, n.Ident[0])
+			}
+		case *parse.VariableNode:
+			if len(n.Ident) > 1 && n.Ident[0] == "$" {
+				out = append(out, n.Ident[1])
+			}
+		case *parse.ChainNode:
+			walk(n.Node, dot)
+		case *parse.IfNode:
+			walk(n.Pipe, dot)
+			walk(n.List, dot)
+			walk(n.ElseList, dot)
+		case *parse.RangeNode:
+			walk(n.Pipe, dot)
+			walk(n.List, false)
+			walk(n.ElseList, dot)
+		case *parse.WithNode:
+			walk(n.Pipe, dot)
+			walk(n.List, false)
+			walk(n.ElseList, dot)
+		}
+	}
+	walk(node, true)
+	return out
 }
