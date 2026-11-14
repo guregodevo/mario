@@ -57,7 +57,10 @@ type Base struct {
 	Isolator Isolator
 	// Decider reads a fan-out's evidence against its `until`; nil: the
 	// `between` command's exit status settles it.
-	Decider   Decider
+	Decider Decider
+	// DryRun walks the DAG and runs nothing: each task renders its texts and
+	// is done by that answer (dryrun.go). Off by default.
+	DryRun    bool
 	Partition string
 	Version   string
 }
@@ -121,6 +124,9 @@ func (b *Base) Fn(name string) func(ctx context.Context) error {
 		d, defined := b.Defs[name]
 		if !defined {
 			return fmt.Errorf("task %s is external: it is made outside this workflow, never run by it", name)
+		}
+		if b.DryRun {
+			return b.Outputs.Write(name, b.Partition, b.dry(d, name))
 		}
 		if strings.TrimSpace(d.When) != "" {
 			line, err := b.Render(d, d.When)
@@ -213,6 +219,9 @@ func (b *Base) once(ctx context.Context, d *templates.YamlTaskDefinition, name s
 // may hold before the task ever ran (an "uncommitted change" target holds in
 // any dirty tree), which would skip it.
 func (b *Base) NewDataEndpoint(name string) workflow.DataEndpoint {
+	if b.DryRun {
+		return b.dryEndpoint(name)
+	}
 	if d, known := b.Defs[name]; known && d.Fanout != nil {
 		return b.Outputs.Endpoint(name, b.Partition)
 	}
