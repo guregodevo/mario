@@ -1,8 +1,10 @@
 package templates
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -36,7 +38,8 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 
 // StringFuncs are the string functions every template has, at walk time and at run time: what a template
 // needs to read an output as data. The value comes last, so they chain with a pipe:
-// {{ output "test" | trim | hasSuffix "exit 0" }}.
+// {{ output "test" | trim | hasSuffix "exit 0" }}, {{ file "event.json" | json "issue.number" }},
+// {{ output "test" | tail 400 }}.
 func StringFuncs() template.FuncMap {
 	return template.FuncMap{
 		"trim":      strings.TrimSpace,
@@ -50,7 +53,71 @@ func StringFuncs() template.FuncMap {
 			}
 			return s
 		},
+		// head 1 .x is the first line of .x; tail 400 .x is its last 400 lines.
+		"head": func(n int, s string) string { return lines(s, n, false) },
+		"tail": func(n int, s string) string { return lines(s, n, true) },
+		// json "workflow_run.id" .x is that field of the JSON text .x.
+		"json": jsonField,
 	}
+}
+
+// lines keeps the first n lines of s, or the last n. A final newline ends the last line, it is not a
+// line of its own. n of zero or less keeps nothing.
+func lines(s string, n int, fromEnd bool) string {
+	if n <= 0 || s == "" {
+		return ""
+	}
+	end := ""
+	if strings.HasSuffix(s, "\n") {
+		s, end = strings.TrimSuffix(s, "\n"), "\n"
+	}
+	all := strings.Split(s, "\n")
+	if n >= len(all) {
+		return s + end
+	}
+	if fromEnd {
+		return strings.Join(all[len(all)-n:], "\n") + end
+	}
+	return strings.Join(all[:n], "\n") + end
+}
+
+// jsonField reads one field of a JSON text by a dotted path: "workflow_run.id", "issue.labels.0.name" (a
+// number is a place in a list). A string comes out as it is, a number as written, an object or a list as
+// JSON. A field that is not there, or null, is empty, so `default` gives it a value. Text that is not JSON
+// is an error.
+func jsonField(path, s string) (string, error) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return "", fmt.Errorf("json %q: the text is not JSON: %v", path, err)
+	}
+	for _, key := range strings.Split(path, ".") {
+		switch at := v.(type) {
+		case map[string]interface{}:
+			v = at[key]
+		case []interface{}:
+			i, err := strconv.Atoi(key)
+			if err != nil || i < 0 || i >= len(at) {
+				return "", nil
+			}
+			v = at[i]
+		default:
+			return "", nil
+		}
+	}
+	switch at := v.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return at, nil
+	case json.Number:
+		return at.String(), nil
+	case bool:
+		return strconv.FormatBool(at), nil
+	}
+	out, err := json.Marshal(v)
+	return string(out), err
 }
 
 func _outputPath(baseDir, projectID, datasetID, tableName string) string {
