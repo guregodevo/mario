@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -449,4 +450,210 @@ func withoutRunShape(yamlContent []byte, hasEach bool) ([]byte, error) {
 	}
 	delete(doc, "fanout")
 	return yaml.Marshal(doc)
+}
+
+// YamlTaskDefinitions is a workflow's tasks by name, <workflow>.<group>.<task>: what Walk returns.
+type YamlTaskDefinitions map[string]*YamlTaskDefinition
+
+// Compose makes one graph of this workflow and the workflows it requires. A requirement that names a task
+// of another workflow (project_id) and is not external pulls that task, and what it requires, into the
+// definitions, and the scheduler runs them upstream in the same run. sibling loads another workflow by
+// its name; nil when there is none, and the requirement is left for the DAG builder to refuse.
+//
+//   - Only what is required comes in.
+//   - The pulled workflow's first tasks wait for what the requiring task requires in its own workflow,
+//     except what that already needs: a task that requires `hand` and another workflow's `make` runs hand,
+//     then the other workflow, then itself.
+//   - with: on the requirement binds the args of the pulled tasks that declare them. A value is written as
+//     anywhere else in the requiring task: {{ output "hand" }} is this workflow's hand, though the value is
+//     rendered when the pulled task runs. A key no pulled task declares is an error that lists the args
+//     that are declared, and so is one task bound to two values.
+//
+// An external requirement is untouched: its target is read, nothing of it runs.
+func (defs YamlTaskDefinitions) Compose(sibling func(project string) (map[string]*YamlTaskDefinition, error)) error {
+	own := make(YamlTaskDefinitions, len(defs))
+	for name, d := range defs {
+		own[name] = d
+	}
+	if err := defs.pull(sibling); err != nil {
+		return err
+	}
+	bound := map[binding]string{} // the value each arg of each pulled task was bound to
+	for name, d := range own {
+		var here []Requires
+		pulled := map[string]bool{}
+		for _, r := range d.Requires {
+			switch {
+			case own[r.Name()] != nil:
+				here = append(here, r)
+			case !r.External:
+				defs.reach(own, r.Name(), pulled)
+			}
+		}
+		// What d's own requirements already need stays ahead of them: waiting on d there is a cycle.
+		ahead := map[string]bool{}
+		for _, r := range here {
+			defs.reach(nil, r.Name(), ahead)
+		}
+		for n := range pulled {
+			if p := defs[n]; !ahead[n] && !p.requiresAny(pulled) {
+				p.After(here)
+			}
+		}
+		for _, r := range d.Requires {
+			if r.External || len(r.With) == 0 {
+				continue
+			}
+			reached := map[string]bool{}
+			defs.reach(own, r.Name(), reached)
+			for arg, value := range r.With {
+				value = d.qualify(value)
+				used := false
+				for n := range reached {
+					if !defs[n].Bind(arg, value) {
+						continue
+					}
+					used = true
+					b := binding{Task: n, Arg: arg}
+					if prev, ok := bound[b]; ok && prev != value {
+						return fmt.Errorf("task %s: %s is bound twice, to %q and %q", name, b, prev, value)
+					}
+					bound[b] = value
+				}
+				if !used {
+					return fmt.Errorf("task %s binds %s, which no task of %s declares as an arg (declared: %s)", name, arg, r.Name(), defs.declared(reached))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// binding is one arg of one pulled task: what a with: sets.
+type binding struct {
+	Task string
+	Arg  string
+}
+
+func (b binding) String() string { return b.Task + "." + b.Arg }
+
+// pull adds every task of another workflow that is required, transitively.
+func (defs YamlTaskDefinitions) pull(sibling func(string) (map[string]*YamlTaskDefinition, error)) error {
+	loaded := map[string]map[string]*YamlTaskDefinition{}
+	var queue []string
+	for _, d := range defs {
+		queue = append(queue, d.missing(defs)...)
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if defs[name] != nil {
+			continue
+		}
+		project := strings.SplitN(name, ".", 2)[0]
+		if _, seen := loaded[project]; !seen {
+			found, err := sibling(project)
+			if err != nil {
+				return fmt.Errorf("workflow %s: %w", project, err)
+			}
+			byName := make(map[string]*YamlTaskDefinition, len(found))
+			for _, d := range found {
+				byName[d.Name] = d
+			}
+			loaded[project] = byName
+		}
+		if d := loaded[project][name]; d != nil {
+			defs[name] = d
+			queue = append(queue, d.missing(defs)...)
+		}
+	}
+	return nil
+}
+
+// reach marks the task and what it requires, transitively, leaving out the tasks of except.
+func (defs YamlTaskDefinitions) reach(except YamlTaskDefinitions, name string, into map[string]bool) {
+	d := defs[name]
+	if d == nil || into[name] || except[name] != nil {
+		return
+	}
+	into[name] = true
+	for _, r := range d.Requires {
+		defs.reach(except, r.Name(), into)
+	}
+}
+
+// missing is the tasks d requires that defs does not hold and that are not external.
+func (d *YamlTaskDefinition) missing(defs YamlTaskDefinitions) []string {
+	var out []string
+	for _, r := range d.Requires {
+		if defs[r.Name()] == nil && !r.External {
+			out = append(out, r.Name())
+		}
+	}
+	return out
+}
+
+// shortOutput is {{ output "name" }} with a short name: a task of the group of the task that wrote it.
+var shortOutput = regexp.MustCompile(`(\boutput\s+")([^".]+)(")`)
+
+// qualify gives the short task names in text d's own workflow and group, so text written in d reads the
+// same when another workflow's task renders it.
+func (d *YamlTaskDefinition) qualify(text string) string {
+	seg := strings.SplitN(d.Name, ".", 3)
+	if len(seg) < 3 {
+		return text
+	}
+	return shortOutput.ReplaceAllString(text, "${1}"+seg[0]+"."+seg[1]+".${2}${3}")
+}
+
+// declared is the args the named tasks declare, sorted: what a with: may bind.
+func (defs YamlTaskDefinitions) declared(names map[string]bool) string {
+	seen := map[string]bool{}
+	var args []string
+	for n := range names {
+		for arg := range defs[n].Args {
+			if !seen[arg] {
+				seen[arg] = true
+				args = append(args, arg)
+			}
+		}
+	}
+	if len(args) == 0 {
+		return "none"
+	}
+	sort.Strings(args)
+	return strings.Join(args, ", ")
+}
+
+// requiresAny says whether d requires one of the named tasks.
+func (d *YamlTaskDefinition) requiresAny(names map[string]bool) bool {
+	for _, r := range d.Requires {
+		if names[r.Name()] {
+			return true
+		}
+	}
+	return false
+}
+
+// After makes d run after the given requirements, adding those it does not have.
+func (d *YamlTaskDefinition) After(reqs []Requires) {
+	have := map[string]bool{}
+	for _, r := range d.Requires {
+		have[r.Name()] = true
+	}
+	for _, r := range reqs {
+		if !have[r.Name()] {
+			d.Requires = append(d.Requires, r)
+			have[r.Name()] = true
+		}
+	}
+}
+
+// Bind sets an arg d declares to value and answers true; an arg d does not declare is left alone.
+func (d *YamlTaskDefinition) Bind(arg, value string) bool {
+	if _, declared := d.Args[arg]; !declared {
+		return false
+	}
+	d.Args[arg] = value
+	return true
 }
