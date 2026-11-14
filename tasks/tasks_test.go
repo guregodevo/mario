@@ -781,3 +781,43 @@ func TestCompileAcceptsOutputsItCannotOrNeedNotCheck(t *testing.T) {
 		t.Fatalf("refused:\n%v", err)
 	}
 }
+
+// A one-line command holding " #" inside a quote is cut there by YAML, which reads the rest as a comment:
+// the shell then sees an unclosed quote. Compile refuses it and says to write a block. Found by a real
+// run: `gh issue view … --jq '"# \(.title)… (issue #\(.number))"'` failed with "unexpected EOF".
+func TestCompileRefusesACommandYAMLCutAtAComment(t *testing.T) {
+	err := compileOf(t, map[string]string{
+		"task":  "type: command\ncommand: gh issue view 7 --jq '\"# \\(.title) (issue #\\(.number))\"'\n",
+		"guard": "type: command\ncommand: echo ok\nwhen: test \"$(echo 'a #b')\" = x\ntarget:\n  command: grep -q 'done #1' log.txt\n",
+	})
+	if err == nil {
+		t.Fatal("nothing refused")
+	}
+	got := strings.Split(err.Error(), "\n")
+	want := []string{
+		`steps/guard.yaml: target.command: ends inside a quote: YAML read the rest of the line as a comment (#1' log.txt). Write it as a block, where # is text: target.command: | and the line under it, indented`,
+		`steps/guard.yaml: when: ends inside a quote: YAML read the rest of the line as a comment (#b')" = x). Write it as a block, where # is text: when: | and the line under it, indented`,
+		`steps/task.yaml: command: ends inside a quote: YAML read the rest of the line as a comment (#\(.number))"'). Write it as a block, where # is text: command: | and the line under it, indented`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d problems, want %d:\n%v", len(got), len(want), err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("problem %d:\n%s\nwant\n%s", i, got[i], want[i])
+		}
+	}
+}
+
+// What stays legal: a comment after a whole command, the block form with # in it, a value quoted in YAML,
+// and a # with no space before it.
+func TestCompileLeavesARealCommentAndABlockAlone(t *testing.T) {
+	if err := compileOf(t, map[string]string{
+		"comment": "type: command\ncommand: go test ./...   # the checks\n",
+		"block":   "type: command\ncommand: |\n  gh issue view 7 --jq '\"# \\(.title) (issue #\\(.number))\"'\n",
+		"quoted":  "type: command\ncommand: \"echo 'a #b'\"   # said twice\n",
+		"nospace": "type: command\ncommand: echo '(#12)'\n",
+	}); err != nil {
+		t.Fatalf("refused:\n%v", err)
+	}
+}
