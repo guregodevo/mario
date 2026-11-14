@@ -647,6 +647,7 @@ func TestATemplateReadsAJSONFieldAndTheLastLines(t *testing.T) {
 	}
 }
 
+// A template task needs a text, and one with no target keeps only its answer.
 func TestATemplateTaskNeedsATextAndWritesNoFileWithoutATarget(t *testing.T) {
 	root := t.TempDir()
 	types := []Base{Template()}

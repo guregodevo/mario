@@ -789,6 +789,15 @@ func (defs YamlTaskDefinitions) outputsOf(d *YamlTaskDefinition) []CompileError 
 			}
 			found = append(found, e)
 		}
+		for _, pattern := range literals(tree.Tree.Root, "match") {
+			if _, err := regexp.Compile(pattern); err != nil {
+				e := at
+				e.Field = f.Key
+				e.Problem = fmt.Sprintf("{{ match %q }} is not a regular expression: %v", pattern, err)
+				e.Fix = "Write it in Go's syntax (pkg.go.dev/regexp/syntax). In a YAML value in double quotes a backslash is written twice"
+				found = append(found, e)
+			}
+		}
 	}
 	return found
 }
@@ -827,7 +836,11 @@ func lastName(full string) string {
 }
 
 // usedOutputs is the task names a template reads with {{ output "name" }}, where the name is written out.
-func usedOutputs(node parse.Node) []string {
+func usedOutputs(node parse.Node) []string { return literals(node, "output") }
+
+// literals is the first argument of every call of a function in a template, where it is written out as a
+// string: the names {{ output "name" }} reads, the expressions {{ match "re" }} uses.
+func literals(node parse.Node, function string) []string {
 	var out []string
 	var walk func(n parse.Node)
 	walk = func(n parse.Node) {
@@ -850,7 +863,7 @@ func usedOutputs(node parse.Node) []string {
 			}
 		case *parse.CommandNode:
 			if len(n.Args) >= 2 {
-				if id, ok := n.Args[0].(*parse.IdentifierNode); ok && id.Ident == "output" {
+				if id, ok := n.Args[0].(*parse.IdentifierNode); ok && id.Ident == function {
 					if lit, ok := n.Args[1].(*parse.StringNode); ok {
 						out = append(out, lit.Text)
 					}
