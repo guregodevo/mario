@@ -318,6 +318,15 @@ func (b *Base) Render(d *templates.YamlTaskDefinition, text string) (string, err
 		}
 		return string(data), nil
 	}
+	// `exists "x.md"` says whether a file of the project is there, so a template reads a file a passed-over
+	// task may not have written: {{ if exists "x.md" }}{{ file "x.md" }}{{ end }}.
+	funcs["exists"] = func(path string) (bool, error) {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(b.Dir, path)
+		}
+		fi, err := os.Stat(path)
+		return err == nil && !fi.IsDir(), nil
+	}
 	// An arg's value is a template too, rendered once over the same args and funcs: a workflow that pulls
 	// another in binds that one's args to its own outputs (`dir: '{{ output "ship.steps.handoff" }}'`).
 	for k, v := range d.Args {

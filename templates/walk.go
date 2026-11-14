@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -29,6 +30,8 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 		return "", fmt.Errorf("output %q is only known when the task runs", name)
 	}, "file": func(path string) (string, error) {
 		return "", fmt.Errorf("file %q is only read when the task runs", path)
+	}, "exists": func(path string) (bool, error) {
+		return false, fmt.Errorf("file %q is only looked for when the task runs", path)
 	}}
 	for name, fn := range StringFuncs() {
 		funcs[name] = fn
@@ -39,7 +42,7 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 // StringFuncs are the string functions every template has, at walk time and at run time: what a template
 // needs to read an output as data. The value comes last, so they chain with a pipe:
 // {{ output "test" | trim | hasSuffix "exit 0" }}, {{ file "event.json" | json "issue.number" }},
-// {{ output "test" | tail 400 }}.
+// {{ output "test" | tail 400 }}, {{ output "review" | match "(?im)^verdict: (pass|fail)" }}.
 func StringFuncs() template.FuncMap {
 	return template.FuncMap{
 		"trim":      strings.TrimSpace,
@@ -58,7 +61,27 @@ func StringFuncs() template.FuncMap {
 		"tail": func(n int, s string) string { return lines(s, n, true) },
 		// json "workflow_run.id" .x is that field of the JSON text .x.
 		"json": jsonField,
+		// match "(?i)^verdict: (pass|fail)" .x is what the regular expression finds in .x: its first group
+		// when it has one, else the whole match, and empty when it finds nothing.
+		"match": match,
 	}
+}
+
+// match is the first match of a regular expression (Go's syntax) in s: the first group when the expression
+// has one, else all of it. Nothing found is empty, so `default` gives it a value and `if` reads it as false.
+func match(pattern, s string) (string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("match %q: not a regular expression: %v", pattern, err)
+	}
+	found := re.FindStringSubmatch(s)
+	switch {
+	case found == nil:
+		return "", nil
+	case len(found) > 1:
+		return found[1], nil
+	}
+	return found[0], nil
 }
 
 // lines keeps the first n lines of s, or the last n. A final newline ends the last line, it is not a

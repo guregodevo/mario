@@ -145,3 +145,22 @@ func TestJSONReadsOneField(t *testing.T) {
 		t.Errorf("not JSON: err %v", err)
 	}
 }
+
+func TestMatchFindsTheFirstGroupOrTheWholeMatch(t *testing.T) {
+	find := StringFuncs()["match"].(func(string, string) (string, error))
+	for _, c := range []struct{ pattern, text, want string }{
+		{`(?im)^[ \t*_]*verdict:[ \t*_]*(pass|fail)`, "Looking at it.\n**Verdict:** PASS\nverdict: FAIL\n", "PASS"},
+		{`(?im)^verdict: (pass|fail)`, "I think the verdict: PASS is right\n", ""},
+		{`exit \d+`, "ran\nexit 3\n", "exit 3"},
+		{`(a)(b)`, "ab", "a"},
+		{`x`, "", ""},
+	} {
+		got, err := find(c.pattern, c.text)
+		if err != nil || got != c.want {
+			t.Errorf("match %q in %q: %q, %v; want %q", c.pattern, c.text, got, err, c.want)
+		}
+	}
+	if _, err := find("(", "x"); err == nil || !strings.Contains(err.Error(), "not a regular expression") {
+		t.Errorf("a bad expression: err %v", err)
+	}
+}
