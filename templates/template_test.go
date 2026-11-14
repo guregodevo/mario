@@ -2,6 +2,7 @@ package templates
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"text/template"
 )
@@ -97,5 +98,50 @@ func TestStringFuncs(t *testing.T) {
 	d := f["default"].(func(string, string) string)
 	if d("none", " \n") != "none" || d("none", "x") != "x" {
 		t.Error("default")
+	}
+}
+
+func TestHeadAndTailKeepLines(t *testing.T) {
+	f := StringFuncs()
+	head, tail := f["head"].(func(int, string) string), f["tail"].(func(int, string) string)
+	for _, c := range []struct {
+		name, got, want string
+	}{
+		{"head 1", head(1, "a\nb\nc\n"), "a\n"},
+		{"head 1, no final newline", head(1, "a\nb"), "a"},
+		{"head past the end", head(9, "a\nb\n"), "a\nb\n"},
+		{"tail 2", tail(2, "a\nb\nc\n"), "b\nc\n"},
+		{"tail 2, no final newline", tail(2, "a\nb\nc"), "b\nc"},
+		{"tail past the end", tail(9, "a\nb"), "a\nb"},
+		{"tail 0", tail(0, "a\nb"), ""},
+		{"head of nothing", head(3, ""), ""},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestJSONReadsOneField(t *testing.T) {
+	read := StringFuncs()["json"].(func(string, string) (string, error))
+	doc := `{"workflow_run":{"id":12345678901234567890,"ok":true},"issue":{"title":"It \"breaks\"","body":null,"labels":[{"name":"bug"},{"name":"p1"}]}}`
+	for path, want := range map[string]string{
+		"workflow_run.id":     "12345678901234567890", // as written, not 1.2345678901234567e+19
+		"workflow_run.ok":     "true",
+		"issue.title":         `It "breaks"`,
+		"issue.body":          "",
+		"issue.labels.1.name": "p1",
+		"issue.labels.7.name": "",
+		"issue.labels.0":      `{"name":"bug"}`,
+		"no.such.field":       "",
+		"issue.title.deeper":  "",
+	} {
+		got, err := read(path, doc)
+		if err != nil || got != want {
+			t.Errorf("json %q: %q, %v; want %q", path, got, err, want)
+		}
+	}
+	if _, err := read("a", "not json"); err == nil || !strings.Contains(err.Error(), "the text is not JSON") {
+		t.Errorf("not JSON: err %v", err)
 	}
 }

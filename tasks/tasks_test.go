@@ -622,7 +622,31 @@ func TestATemplateTaskRendersItsTextFromOutputs(t *testing.T) {
 	}
 }
 
-// A template task needs a text, and one with no target keeps only its answer.
+// A template reads a field of a JSON file and the last lines of an output: what a script did with a JSON
+// tool and tail.
+func TestATemplateReadsAJSONFieldAndTheLastLines(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command(), Template()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	if err := os.WriteFile(filepath.Join(root, "event.json"), []byte(`{"issue":{"number":42,"title":"It breaks","labels":[{"name":"bug"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"log":  "type: command\ncommand: echo one; echo two; echo three\n",
+		"body": "type: template\nrequires:\n  - table_pattern: log\ntext: |\n  issue #{{ file \"event.json\" | json \"issue.number\" }} \"{{ file \"event.json\" | json \"issue.title\" }}\" [{{ file \"event.json\" | json \"issue.labels.0.name\" }}] by {{ file \"event.json\" | json \"issue.user.login\" | default \"unknown\" }}\n  first: {{ output \"log\" | head 1 | trim }}\n  {{ output \"log\" | tail 2 }}\ntarget:\n  file: out/body-{{.partition}}.md\n",
+	})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done body") {
+		t.Fatalf("events = %q", seq)
+	}
+	want := "issue #42 \"It breaks\" [bug] by unknown\nfirst: one\ntwo\nthree\n"
+	if b, err := os.ReadFile(filepath.Join(root, "out", "body-2026-10-02.md")); err != nil || strings.TrimRight(string(b), "\n") != strings.TrimRight(want, "\n") {
+		t.Fatalf("file = %q, %v\nwant %q", b, err, want)
+	}
+}
+
 func TestATemplateTaskNeedsATextAndWritesNoFileWithoutATarget(t *testing.T) {
 	root := t.TempDir()
 	types := []Base{Template()}
