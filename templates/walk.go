@@ -28,7 +28,29 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 	}, "file": func(path string) (string, error) {
 		return "", fmt.Errorf("file %q is only read when the task runs", path)
 	}}
+	for name, fn := range StringFuncs() {
+		funcs[name] = fn
+	}
 	return config, funcs, nil
+}
+
+// StringFuncs are the string functions every template has, at walk time and at run time: what a template
+// needs to read an output as data. The value comes last, so they chain with a pipe:
+// {{ output "test" | trim | hasSuffix "exit 0" }}.
+func StringFuncs() template.FuncMap {
+	return template.FuncMap{
+		"trim":      strings.TrimSpace,
+		"contains":  func(part, s string) bool { return strings.Contains(s, part) },
+		"hasPrefix": func(prefix, s string) bool { return strings.HasPrefix(s, prefix) },
+		"hasSuffix": func(suffix, s string) bool { return strings.HasSuffix(s, suffix) },
+		// default "none" .x is .x, or "none" when .x is empty or only space.
+		"default": func(fallback, s string) string {
+			if strings.TrimSpace(s) == "" {
+				return fallback
+			}
+			return s
+		},
+	}
 }
 
 func _outputPath(baseDir, projectID, datasetID, tableName string) string {
