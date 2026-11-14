@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -641,5 +642,101 @@ func TestATemplateTaskNeedsATextAndWritesNoFileWithoutATarget(t *testing.T) {
 	}
 	if out, _ := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.note", "2026-10-02"); out != "run 2026-10-02" {
 		t.Fatalf("answer = %q", out)
+	}
+}
+
+// compileOf walks the files as a workflow and compiles it.
+func compileOf(t *testing.T, files map[string]string) error {
+	t.Helper()
+	types := []Base{Command(), LLM(&echoModel{}), Template()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	return templates.YamlTaskDefinitions(writeDAG(t, t.TempDir(), reg, files)).Compile()
+}
+
+// A template that uses an arg its task does not declare is refused before a run, with where it is, what
+// it would have done, and what to write: the message a coder can act on without reading mario.
+func TestCompileRefusesAnArgTheTaskDoesNotDeclare(t *testing.T) {
+	err := compileOf(t, map[string]string{
+		"settle": "type: command\nargs:\n  max_bugs: \"3\"\ncommand: settle {{.max_bugs}} {{.file}}\n",
+	})
+	want := `steps/settle.yaml: command: uses {{.file}}, an arg this task does not declare; it would render <no value>. ` +
+		`Declare it in this file under args: (file: ""), or use one that is declared: dataset_id, max_bugs, partition, project_id, table_name`
+	if err == nil || err.Error() != want {
+		t.Fatalf("got\n%v\nwant\n%s", err, want)
+	}
+	var ce templates.CompileError
+	if !errors.As(err, &ce) || ce.Task != "wf.steps.settle" || ce.Field != "command" {
+		t.Fatalf("not a CompileError a host can read: %+v", ce)
+	}
+}
+
+// Every templated field is checked, every problem is reported at once, in file order, and a template that
+// does not parse says so with the parser's reason.
+func TestCompileReportsEveryProblemAtOnce(t *testing.T) {
+	err := compileOf(t, map[string]string{
+		"a": "type: command\ncommand: echo ok\nwhen: test -n \"{{.dir}}\"\ntarget:\n  file: out-{{.day}}.md\n",
+		"b": "type: template\nargs:\n  where: '{{ output \"a\" }}/{{.sub}}'\ntext: '{{ if .where }}unclosed'\n",
+	})
+	if err == nil {
+		t.Fatal("nothing refused")
+	}
+	got := strings.Split(err.Error(), "\n")
+	for i, want := range []string{
+		"steps/a.yaml: when: uses {{.dir}}",
+		"steps/a.yaml: target.file: uses {{.day}}",
+		"steps/b.yaml: text: the template does not parse",
+		"steps/b.yaml: args.where: uses {{.sub}}",
+	} {
+		if i >= len(got) || !strings.HasPrefix(got[i], want) {
+			t.Fatalf("problem %d:\n%s\nwant it to start\n%s\nall:\n%v", i, at(got, i), want, err)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("%d problems, want 4:\n%v", len(got), err)
+	}
+}
+
+// What compiles: declared args, the run's own names, an each task's item, a fan-out's n, functions, and a dot that is
+// something else inside range and with. A workflow with no template has nothing to refuse.
+func TestCompileAcceptsWhatIsDeclared(t *testing.T) {
+	if err := compileOf(t, map[string]string{
+		"plain": "type: command\ncommand: echo plain\n",
+		"each":  "type: command\neach: [build, test]\nargs:\n  run: 'go {{.item}} ./...'\ncommand: '{{.run}} # {{.partition}} {{.table_name}}'\n",
+		"tries": "type: command\nfanout:\n  min: 1\n  max: 2\ncommand: echo attempt {{.n}}\n",
+		"body":  "type: template\nargs:\n  issue: \"\"\nrequires:\n  - table_pattern: plain\ntext: |\n  {{ output \"plain\" | trim }}{{ if .issue }} Fixes #{{ $.issue }}{{ end }}\n  {{ with .issue }}{{ .anything }}{{ end }}{{ range .issue }}{{ .x }}{{ end }}\n",
+	}); err != nil {
+		t.Fatalf("refused:\n%v", err)
+	}
+}
+
+func at(lines []string, i int) string {
+	if i < len(lines) {
+		return lines[i]
+	}
+	return "(none)"
+}
+
+// No run without a compile: building the graph of a workflow that does not compile is refused with the
+// same message, and nothing of it runs.
+func TestBuildDAGCompilesFirst(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"first":  "type: command\ncommand: echo ran > ran.txt\n",
+		"second": "type: command\ncommand: echo {{.missing}}\nrequires:\n  - table_pattern: first\n",
+	})
+	_, err := factory.BuildDAG("v", "2026-10-02", "c", static.NewWorkflowRepository(), defs, reg)
+	if err == nil || !strings.Contains(err.Error(), "steps/second.yaml: command: uses {{.missing}}") {
+		t.Fatalf("err %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "ran.txt")); statErr == nil {
+		t.Fatal("a task ran from a workflow that does not compile")
 	}
 }
