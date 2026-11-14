@@ -689,11 +689,152 @@ func (defs YamlTaskDefinitions) Compile() error {
 	sort.Strings(names)
 	var found []error
 	for _, name := range names {
-		for _, e := range defs[name].compile() {
+		d := defs[name]
+		for _, e := range d.compile() {
+			found = append(found, e)
+		}
+		for _, e := range defs.outputsOf(d) {
 			found = append(found, e)
 		}
 	}
 	return errors.Join(found...)
+}
+
+// outputsOf checks every {{ output "name" }} d reads: the task named must run before d, so it must be one d
+// requires, directly or through what it requires. Otherwise the output is not there when d renders, or is
+// there by luck of the order. A name built at run time ({{ output (printf ...) }}) cannot be told here.
+func (defs YamlTaskDefinitions) outputsOf(d *YamlTaskDefinition) []CompileError {
+	seg := strings.SplitN(d.Name, ".", 3)
+	for len(seg) < 3 {
+		seg = append(seg, "")
+	}
+	_, funcs, err := ArgsOnly(d, "", seg[0], seg[1], seg[2])
+	if err != nil {
+		return nil
+	}
+	upstream := map[string]bool{}
+	defs.before(d, upstream)
+	at := CompileError{Task: d.Name, File: seg[1] + "/" + strings.TrimSuffix(seg[2], "-"+d.Item) + ".yaml"}
+	var found []CompileError
+	for _, f := range d.fields() {
+		if !strings.Contains(f.Text, "{{") {
+			continue
+		}
+		tree, err := template.New(d.Name).Funcs(funcs).Parse(f.Text)
+		if err != nil {
+			continue // compile reported it
+		}
+		seen := map[string]bool{}
+		for _, name := range usedOutputs(tree.Tree.Root) {
+			full := name
+			if !strings.Contains(name, ".") {
+				full = seg[0] + "." + seg[1] + "." + name
+			}
+			if upstream[full] || seen[full] {
+				continue
+			}
+			seen[full] = true
+			e := at
+			e.Field = f.Key
+			switch {
+			case full == d.Name:
+				e.Problem = fmt.Sprintf("reads {{ output %q }}, its own output, which is not written until it ends", name)
+				e.Fix = "Read the output of a task this one requires"
+			case defs[full] != nil:
+				e.Problem = fmt.Sprintf("reads {{ output %q }}, but this task does not require %s, so it may run first and find nothing", name, name)
+				e.Fix = fmt.Sprintf("Add it in this file under requires: (- table_pattern: %s)", lastName(full))
+			default:
+				e.Problem = fmt.Sprintf("reads {{ output %q }}, but no task is named %s", name, name)
+				e.Fix = "Name a task this one requires: " + defs.requiredNames(d, seg[0]+"."+seg[1]+".")
+			}
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+// before marks every task that runs before d: what it requires, and what those require.
+func (defs YamlTaskDefinitions) before(d *YamlTaskDefinition, into map[string]bool) {
+	for _, r := range d.Requires {
+		name := r.Name()
+		if into[name] {
+			continue
+		}
+		into[name] = true
+		if up := defs[name]; up != nil {
+			defs.before(up, into)
+		}
+	}
+}
+
+// requiredNames is the tasks d may read an output of, short where they are in d's own group, sorted.
+func (defs YamlTaskDefinitions) requiredNames(d *YamlTaskDefinition, group string) string {
+	upstream := map[string]bool{}
+	defs.before(d, upstream)
+	if len(upstream) == 0 {
+		return "none yet: this task requires nothing"
+	}
+	names := make([]string, 0, len(upstream))
+	for name := range upstream {
+		names = append(names, strings.TrimPrefix(name, group))
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+func lastName(full string) string {
+	return full[strings.LastIndex(full, ".")+1:]
+}
+
+// usedOutputs is the task names a template reads with {{ output "name" }}, where the name is written out.
+func usedOutputs(node parse.Node) []string {
+	var out []string
+	var walk func(n parse.Node)
+	walk = func(n parse.Node) {
+		switch n := n.(type) {
+		case *parse.ListNode:
+			if n == nil {
+				return
+			}
+			for _, c := range n.Nodes {
+				walk(c)
+			}
+		case *parse.ActionNode:
+			walk(n.Pipe)
+		case *parse.PipeNode:
+			if n == nil {
+				return
+			}
+			for _, c := range n.Cmds {
+				walk(c)
+			}
+		case *parse.CommandNode:
+			if len(n.Args) >= 2 {
+				if id, ok := n.Args[0].(*parse.IdentifierNode); ok && id.Ident == "output" {
+					if lit, ok := n.Args[1].(*parse.StringNode); ok {
+						out = append(out, lit.Text)
+					}
+				}
+			}
+			for _, a := range n.Args {
+				walk(a)
+			}
+		case *parse.IfNode:
+			walk(n.Pipe)
+			walk(n.List)
+			walk(n.ElseList)
+		case *parse.RangeNode:
+			walk(n.Pipe)
+			walk(n.List)
+			walk(n.ElseList)
+		case *parse.WithNode:
+			walk(n.Pipe)
+			walk(n.List)
+			walk(n.ElseList)
+		}
+	}
+	walk(node)
+	return out
 }
 
 // field is one templated field of a task, by the YAML key a person reads.

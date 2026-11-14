@@ -678,7 +678,7 @@ func TestCompileRefusesAnArgTheTaskDoesNotDeclare(t *testing.T) {
 func TestCompileReportsEveryProblemAtOnce(t *testing.T) {
 	err := compileOf(t, map[string]string{
 		"a": "type: command\ncommand: echo ok\nwhen: test -n \"{{.dir}}\"\ntarget:\n  file: out-{{.day}}.md\n",
-		"b": "type: template\nargs:\n  where: '{{ output \"a\" }}/{{.sub}}'\ntext: '{{ if .where }}unclosed'\n",
+		"b": "type: template\nargs:\n  where: '{{ output \"a\" }}/{{.sub}}'\nrequires:\n  - table_pattern: a\ntext: '{{ if .where }}unclosed'\n",
 	})
 	if err == nil {
 		t.Fatal("nothing refused")
@@ -738,5 +738,46 @@ func TestBuildDAGCompilesFirst(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "ran.txt")); statErr == nil {
 		t.Fatal("a task ran from a workflow that does not compile")
+	}
+}
+
+// {{ output "x" }} is refused before a run unless x runs before the task: required by it, directly or
+// through what it requires. Each case says what to write.
+func TestCompileRefusesAnOutputThatIsNotUpstream(t *testing.T) {
+	err := compileOf(t, map[string]string{
+		"log":     "type: command\ncommand: echo log\n",
+		"mid":     "type: command\ncommand: echo mid\nrequires:\n  - table_pattern: log\n",
+		"ok":      "type: command\ncommand: 'echo {{ output \"log\" }} {{ output \"mid\" | trim }} {{ output \"wf.steps.log\" }}'\nrequires:\n  - table_pattern: mid\n",
+		"unasked": "type: command\ncommand: 'echo {{ output \"log\" }}'\n",
+		"typo":    "type: command\ncommand: 'echo {{ output \"lgo\" }}'\nrequires:\n  - table_pattern: mid\n",
+		"self":    "type: command\ncommand: 'echo {{ output \"self\" }}'\n",
+	})
+	if err == nil {
+		t.Fatal("nothing refused")
+	}
+	got := strings.Split(err.Error(), "\n")
+	want := []string{
+		`steps/self.yaml: command: reads {{ output "self" }}, its own output, which is not written until it ends. Read the output of a task this one requires`,
+		`steps/typo.yaml: command: reads {{ output "lgo" }}, but no task is named lgo. Name a task this one requires: log, mid`,
+		`steps/unasked.yaml: command: reads {{ output "log" }}, but this task does not require log, so it may run first and find nothing. Add it in this file under requires: (- table_pattern: log)`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d problems, want %d:\n%v", len(got), len(want), err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("problem %d:\n%s\nwant\n%s", i, got[i], want[i])
+		}
+	}
+}
+
+// What is left alone: an output named at run time, the output of an external task the step requires, and
+// an output read through a requirement on another workflow.
+func TestCompileAcceptsOutputsItCannotOrNeedNotCheck(t *testing.T) {
+	if err := compileOf(t, map[string]string{
+		"log": "type: command\ncommand: echo log\n",
+		"use": "type: command\ncommand: 'echo {{ output (printf \"%s\" \"log\") }} {{ output \"gate\" }} {{ output \"other.steps.made\" }}'\nrequires:\n  - table_pattern: log\n  - table_pattern: gate\n    external: true\n  - project_id: other\n    table_pattern: made\n    external: true\n",
+	}); err != nil {
+		t.Fatalf("refused:\n%v", err)
 	}
 }
