@@ -549,8 +549,17 @@ func (b binding) String() string { return b.Task + "." + b.Arg }
 func (defs YamlTaskDefinitions) pull(sibling func(string) (map[string]*YamlTaskDefinition, error)) error {
 	loaded := map[string]map[string]*YamlTaskDefinition{}
 	var queue []string
-	for _, d := range defs {
-		queue = append(queue, d.missing(defs)...)
+	asker := map[string]string{} // a missing task -> the task that requires it, for the error
+	ask := func(d *YamlTaskDefinition) {
+		for _, name := range d.missing(defs) {
+			if asker[name] == "" {
+				asker[name] = d.Name
+			}
+			queue = append(queue, name)
+		}
+	}
+	for _, d := range defs.sorted() {
+		ask(d)
 	}
 	for len(queue) > 0 {
 		name := queue[0]
@@ -570,12 +579,37 @@ func (defs YamlTaskDefinitions) pull(sibling func(string) (map[string]*YamlTaskD
 			}
 			loaded[project] = byName
 		}
-		if d := loaded[project][name]; d != nil {
-			defs[name] = d
-			queue = append(queue, d.missing(defs)...)
+		d := loaded[project][name]
+		if d == nil {
+			if len(loaded[project]) > 0 {
+				return fmt.Errorf("task %s requires %s: the workflow %s that was found has no such task (it has: %s). Name one of those, or check that another workflow called %s is not in its place",
+					asker[name], name, project, strings.Join(YamlTaskDefinitions(loaded[project]).names(), ", "), project)
+			}
+			continue
 		}
+		defs[name] = d
+		ask(d)
 	}
 	return nil
+}
+
+// names are the task names, sorted.
+func (defs YamlTaskDefinitions) names() []string {
+	out := make([]string, 0, len(defs))
+	for name := range defs {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sorted are the tasks in the order of their names, so what is reported first is the same on every run.
+func (defs YamlTaskDefinitions) sorted() []*YamlTaskDefinition {
+	out := make([]*YamlTaskDefinition, 0, len(defs))
+	for _, name := range defs.names() {
+		out = append(out, defs[name])
+	}
+	return out
 }
 
 // reach marks the task and what it requires, transitively, leaving out the tasks of except.

@@ -167,6 +167,20 @@ func TestComposeRefusesAndLeavesAlone(t *testing.T) {
 	}
 }
 
+// A workflow of the required name that lacks the required task is said so, with the tasks it does have:
+// a typo, or another workflow of that name standing in the place of the one meant.
+func TestComposeSaysWhatTheFoundWorkflowHas(t *testing.T) {
+	_, reg := commandTypes()
+	_, err := composed(t, t.TempDir(), reg, "upper", map[string]map[string]string{
+		"lower": {"bake": "type: command\ncommand: echo baked\n", "mix": "type: command\ncommand: echo mixed\n"},
+		"upper": {"use": "type: command\ncommand: echo used\nrequires:\n" + requireLowerMake},
+	})
+	want := "task upper.steps.use requires lower.steps.make: the workflow lower that was found has no such task (it has: lower.steps.bake, lower.steps.mix)"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err %v\nwant it to hold %q", err, want)
+	}
+}
+
 func names(defs map[string]*templates.YamlTaskDefinition) []string {
 	var out []string
 	for k := range defs {
