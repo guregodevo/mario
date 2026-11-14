@@ -13,6 +13,7 @@ import (
 
 	"github.com/xeipuuv/gojsonschema"
 	yaml "gopkg.in/yaml.v2"
+	yaml3 "gopkg.in/yaml.v3"
 )
 
 type SchemaLoader interface {
@@ -130,6 +131,10 @@ type YamlTaskDefinition struct {
 	// its templates (prompt, command, when, target). Without it nothing
 	// changes. It is read before the type's schema, so no type has to list it.
 	Each []string `yaml:"each,omitempty"`
+	// Cut is the one-line shell values YAML cut short: the key (command, when, target.command) and the
+	// comment YAML took off its end. A space then # starts a comment in a plain value, so
+	// `command: jq '"(issue #\(.n))"'` reaches the shell as `jq '"(issue`. Compile refuses them.
+	Cut map[string]string `yaml:"-"`
 	// Item is the one entry of Each this copy was made for.
 	Item string `yaml:"-"`
 	// Fanout runs the task several times, each in a working directory of its
@@ -326,6 +331,7 @@ func YamlParse(validator *YAMLValidator, yamlContent []byte) (error, *YamlTaskDe
 	if err != nil {
 		return fmt.Errorf("Error unmarshaling YAML: %v \n", err), nil
 	}
+	task.Cut = cutByComment(yamlContent)
 	return nil, &task
 
 }
@@ -837,6 +843,57 @@ func usedOutputs(node parse.Node) []string {
 	return out
 }
 
+// cutByComment finds the one-line shell values of a task file that YAML ended at a comment while a quote
+// was still open: the value was meant to go on. A comment after a whole command (`go test ./... # checks`)
+// is a comment, and is left alone.
+func cutByComment(yamlContent []byte) map[string]string {
+	var doc yaml3.Node
+	if err := yaml3.Unmarshal(yamlContent, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	cut := map[string]string{}
+	var read func(m *yaml3.Node, prefix string)
+	read = func(m *yaml3.Node, prefix string) {
+		if m.Kind != yaml3.MappingNode {
+			return
+		}
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			key, value := m.Content[i].Value, m.Content[i+1]
+			if key == "target" {
+				read(value, "target.")
+				continue
+			}
+			if key != "command" && key != "when" {
+				continue
+			}
+			if value.Kind == yaml3.ScalarNode && value.Style == 0 && value.LineComment != "" && openQuote(value.Value) {
+				cut[prefix+key] = value.LineComment
+			}
+		}
+	}
+	read(doc.Content[0], "")
+	if len(cut) == 0 {
+		return nil
+	}
+	return cut
+}
+
+// openQuote says a shell line ends inside a ' or " quote.
+func openQuote(line string) bool {
+	var in rune
+	for i, c := range line {
+		switch {
+		case in == 0 && (c == '\'' || c == '"'):
+			in = c
+		case in == '"' && c == '"' && (i == 0 || line[i-1] != '\\'):
+			in = 0
+		case in == '\'' && c == '\'':
+			in = 0
+		}
+	}
+	return in != 0
+}
+
 // field is one templated field of a task, by the YAML key a person reads.
 type field struct {
 	Key  string
@@ -886,6 +943,18 @@ func (d *YamlTaskDefinition) compile() []CompileError {
 	sort.Strings(declared)
 	at := CompileError{Task: d.Name, File: seg[1] + "/" + strings.TrimSuffix(seg[2], "-"+d.Item) + ".yaml"}
 	var found []CompileError
+	cutKeys := make([]string, 0, len(d.Cut))
+	for key := range d.Cut {
+		cutKeys = append(cutKeys, key)
+	}
+	sort.Strings(cutKeys)
+	for _, key := range cutKeys {
+		e := at
+		e.Field = key
+		e.Problem = fmt.Sprintf("ends inside a quote: YAML read the rest of the line as a comment (%s)", d.Cut[key])
+		e.Fix = fmt.Sprintf("Write it as a block, where # is text: %s: | and the line under it, indented", key)
+		found = append(found, e)
+	}
 	for _, f := range d.fields() {
 		if !strings.Contains(f.Text, "{{") {
 			continue
