@@ -594,3 +594,52 @@ func TestATemplateReadsAnOutputWithStringFunctions(t *testing.T) {
 		t.Fatalf("rendered %q, want %q", model.calls, want)
 	}
 }
+
+// A template task declares what a script assembled: a body that ticks a box per check from the check's
+// output, written to its target file. Its answer is the same text.
+func TestATemplateTaskRendersItsTextFromOutputs(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command(), Template()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"ok":   "type: command\ncommand: echo built; echo 'exit 0'\n",
+		"bad":  "type: command\ncommand: echo broke; echo 'exit 3'\n",
+		"body": "type: template\nargs:\n  issue: \"\"\nrequires:\n  - table_pattern: ok\n  - table_pattern: bad\ntext: |\n  - [{{ if output \"ok\" | trim | hasSuffix \"exit 0\" }}x{{ else }} {{ end }}] ok\n  - [{{ if output \"bad\" | trim | hasSuffix \"exit 0\" }}x{{ else }} {{ end }}] bad\n  Fixes #{{ .issue | default \"none\" }}\ntarget:\n  file: out/body-{{.partition}}.md\n",
+	})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done body") {
+		t.Fatalf("events = %q", seq)
+	}
+	want := "- [x] ok\n- [ ] bad\nFixes #none\n"
+	if b, err := os.ReadFile(filepath.Join(root, "out", "body-2026-10-02.md")); err != nil || string(b) != want {
+		t.Fatalf("file = %q, %v", b, err)
+	}
+	if out, err := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.body", "2026-10-02"); err != nil || out != want {
+		t.Fatalf("answer = %q, %v", out, err)
+	}
+}
+
+// A template task needs a text, and one with no target keeps only its answer.
+func TestATemplateTaskNeedsATextAndWritesNoFileWithoutATarget(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Template()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	dir := filepath.Join(root, "bad", "steps")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "empty.yaml"), []byte("type: template\n"), 0o644)
+	if err, _ := templates.Walk(&fileio.LocalFileIO{}, nil, factory.NewValidator(reg), filepath.Join(root, "bad"), "2026-10-02", "", "Prompt"); err == nil {
+		t.Fatal("a template task with no text was accepted")
+	}
+	defs := writeDAG(t, root, reg, map[string]string{"note": "type: template\ntext: run {{.partition}}\n"})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done note") {
+		t.Fatalf("events = %q", seq)
+	}
+	if out, _ := (Outputs{Dir: filepath.Join(root, "out")}).Read("wf.steps.note", "2026-10-02"); out != "run 2026-10-02" {
+		t.Fatalf("answer = %q", out)
+	}
+}

@@ -86,6 +86,8 @@ type YamlTaskDefinition struct {
 	// Agent names who runs the task when the type is run by an agent (a
 	// coding agent, a reviewer): the factory for that type reads it.
 	Agent string `yaml:"agent,omitempty"`
+	// Text is what a template task renders: its answer, and with target.file, that file.
+	Text string `yaml:"text,omitempty"`
 	// Command is what a command task runs (a shell line, a Go template over
 	// args and partition like the prompt).
 	Command string `yaml:"command,omitempty"`
