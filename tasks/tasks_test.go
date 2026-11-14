@@ -571,3 +571,75 @@ func TestARequirementCarriesWith(t *testing.T) {
 		t.Fatalf("requires = %+v", d.Requires)
 	}
 }
+
+// dir: a task works where its dir says, a Go template like its command: the command runs there, the when
+// is checked there and the target is looked for there.
+func TestATaskWorksInItsDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "wt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "wt", "ready"), []byte("x"), 0o644)
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"here": "type: command\nargs:\n  where: wt\ndir: '{{.where}}'\nwhen: test -f ready\ncommand: pwd > made.txt && pwd\ntarget:\n  file: made.txt\n",
+	})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done here") {
+		t.Fatalf("events = %q", seq)
+	}
+	if _, err := os.Stat(filepath.Join(root, "wt", "made.txt")); err != nil {
+		t.Fatal("the command did not run in the task's dir")
+	}
+	out, err := Outputs{Dir: filepath.Join(root, "out")}.Read("wf.steps.here", "2026-10-02")
+	if err != nil || !strings.HasSuffix(strings.TrimSpace(out), string(filepath.Separator)+"wt") {
+		t.Fatalf("output %q, %v", out, err)
+	}
+}
+
+// dir is read for every type, before the type's schema: a type that does not list it accepts it, and a dir
+// that is not text is refused.
+func TestDirIsReadBeforeTheSchema(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	dir := filepath.Join(root, "wf", "steps")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("type: command\ndir: [a]\ncommand: echo\n"), 0o644)
+	err, _ := templates.Walk(&fileio.LocalFileIO{}, nil, factory.NewValidator(reg), filepath.Join(root, "wf"), "2026-10-02", "", "Prompt")
+	if err == nil || !strings.Contains(err.Error(), "dir: a path") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// A template task declares what a script used to assemble: a body that ticks a box per check from how it
+// ended, with an optional failing check reported, not stopping the run, and written to its target file.
+func TestATemplateTaskRendersFromStatusesAndOutputs(t *testing.T) {
+	root := t.TempDir()
+	types := []Base{Command(), Template()}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"ok":   "type: command\ncommand: echo fine\n",
+		"bad":  "type: command\ncommand: echo broke; exit 3\noptional: true\n",
+		"body": "type: template\nargs:\n  issue: \"\"\nrequires:\n  - table_pattern: ok\n  - table_pattern: bad\ntext: |\n  - [{{ if eq (status \"ok\") \"done\" }}x{{ else }} {{ end }}] ok: {{ trim (output \"ok\") }}\n  - [{{ if eq (status \"bad\") \"done\" }}x{{ else }} {{ end }}] bad ({{ status \"bad\" }})\n  Fixes #{{ default \"none\" .issue }}\ntarget:\n  file: body.md\n",
+	})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done body") {
+		t.Fatalf("events = %q", seq)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "body.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- [x] ok: fine\n- [ ] bad (failed)\nFixes #none\n"; string(b) != want {
+		t.Fatalf("body.md =\n%s\nwant\n%s", b, want)
+	}
+}

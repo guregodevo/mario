@@ -27,6 +27,13 @@ func ArgsOnly(taskDef *YamlTaskDefinition, partition, projectID, datasetID, tabl
 		return "", fmt.Errorf("output %q is only known when the task runs", name)
 	}, "file": func(path string) (string, error) {
 		return "", fmt.Errorf("file %q is only read when the task runs", path)
+	}, "status": func(name string) string {
+		return ""
+	}, "trim": strings.TrimSpace, "default": func(fallback string, v interface{}) string {
+		if s := strings.TrimSpace(fmt.Sprint(v)); v != nil && s != "" && s != "<no value>" {
+			return fmt.Sprint(v)
+		}
+		return fallback
 	}}
 	return config, funcs, nil
 }
