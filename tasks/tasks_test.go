@@ -571,3 +571,26 @@ func TestARequirementCarriesWith(t *testing.T) {
 		t.Fatalf("requires = %+v", d.Requires)
 	}
 }
+
+// A template reads an output as data: trim, contains, hasPrefix, hasSuffix and default, the value last so
+// they chain with a pipe. A box is ticked from a check's last line.
+func TestATemplateReadsAnOutputWithStringFunctions(t *testing.T) {
+	root := t.TempDir()
+	model := &echoModel{}
+	types := []Base{Command(), LLM(model)}
+	reg := factory.NewComponent()
+	for i := range types {
+		reg.Add(&types[i])
+	}
+	defs := writeDAG(t, root, reg, map[string]string{
+		"ok":   "type: command\ncommand: echo built; echo 'exit 0'\n",
+		"bad":  "type: command\ncommand: echo broke; echo 'exit 3'\n",
+		"body": "type: llm\nargs:\n  issue: \"\"\nprompt: \"[{{ if output \\\"ok\\\" | trim | hasSuffix \\\"exit 0\\\" }}x{{ else }} {{ end }}] ok [{{ if output \\\"bad\\\" | trim | hasSuffix \\\"exit 0\\\" }}x{{ else }} {{ end }}] bad {{ if output \\\"bad\\\" | contains \\\"broke\\\" }}broke{{ end }} {{ if output \\\"ok\\\" | hasPrefix \\\"built\\\" }}built{{ end }} #{{ .issue | default \\\"none\\\" }}\"\nrequires:\n  - table_pattern: ok\n  - table_pattern: bad\n",
+	})
+	if seq := strings.Join(run(t, root, types, defs), " | "); !strings.HasSuffix(seq, "done body") {
+		t.Fatalf("events = %q", seq)
+	}
+	if want := ": [x] ok [ ] bad broke built #none"; len(model.calls) != 1 || model.calls[0] != want {
+		t.Fatalf("rendered %q, want %q", model.calls, want)
+	}
+}

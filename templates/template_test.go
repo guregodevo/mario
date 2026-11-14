@@ -82,3 +82,20 @@ func TestRenderWithArgs(t *testing.T) {
 func normalizeWhitespace(s string) string {
 	return string(bytes.TrimSpace([]byte(s)))
 }
+
+func TestStringFuncs(t *testing.T) {
+	f := StringFuncs()
+	if got := f["trim"].(func(string) string)("  a\n"); got != "a" {
+		t.Errorf("trim %q", got)
+	}
+	if !f["contains"].(func(string, string) bool)("b", "abc") || f["contains"].(func(string, string) bool)("z", "abc") {
+		t.Error("contains")
+	}
+	if !f["hasPrefix"].(func(string, string) bool)("ab", "abc") || !f["hasSuffix"].(func(string, string) bool)("bc", "abc") {
+		t.Error("hasPrefix / hasSuffix")
+	}
+	d := f["default"].(func(string, string) string)
+	if d("none", " \n") != "none" || d("none", "x") != "x" {
+		t.Error("default")
+	}
+}
