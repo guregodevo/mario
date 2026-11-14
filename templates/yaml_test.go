@@ -135,3 +135,20 @@ func TestJsonConversion(t *testing.T) {
 		t.Errorf("Expected non-empty JSON bytes, got empty")
 	}
 }
+
+// A with: value is written in the requiring task: its short output names get that task's workflow and
+// group; a dotted name, and anything that is not an output, is left as written.
+func TestQualifyGivesShortOutputNamesTheirWorkflow(t *testing.T) {
+	d := &YamlTaskDefinition{}
+	d.Name = "ship.steps.finish"
+	for in, want := range map[string]string{
+		`{{ output "hand" }}`:                           `{{ output "ship.steps.hand" }}`,
+		`{{ output "hand" | trim }}/{{output "notes"}}`: `{{ output "ship.steps.hand" | trim }}/{{output "ship.steps.notes"}}`,
+		`{{ output "other.steps.make" }}`:               `{{ output "other.steps.make" }}`,
+		`{{ file "hand" }} plain {{.partition}}`:        `{{ file "hand" }} plain {{.partition}}`,
+	} {
+		if got := d.qualify(in); got != want {
+			t.Errorf("qualify(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
