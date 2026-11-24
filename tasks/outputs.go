@@ -77,6 +77,9 @@ func (e *fileEndpoint) Exists() bool {
 	return err == nil && !st.IsDir()
 }
 
+// targetCheckTimeout caps one run of a command target.
+var targetCheckTimeout = 5 * time.Minute
+
 type commandEndpoint struct {
 	name    string
 	dir     string
@@ -89,7 +92,7 @@ func (e *commandEndpoint) Name() string { return e.name }
 // String names the target as it was checked: the rendered command.
 func (e *commandEndpoint) String() string { return "command: " + e.command }
 func (e *commandEndpoint) Exists() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), targetCheckTimeout)
 	defer cancel()
 	return shellCommand(ctx, e.dir, e.command, e.env).Run() == nil
 }

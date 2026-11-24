@@ -466,7 +466,6 @@ func (b *Base) settled(ctx context.Context, d *templates.YamlTaskDefinition, nam
 			return false, "", nil, "", fmt.Errorf("task %s: between template: %w", name, err)
 		}
 		cmd := shellCommand(ctx, b.Dir, line, b.Env)
-		killGroupOnCancel(cmd)
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
 		runErr := cmd.Run()
