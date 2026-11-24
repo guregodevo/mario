@@ -31,10 +31,6 @@ func runCommand(ctx context.Context, b *Base, d *templates.YamlTaskDefinition, n
 		return "", fmt.Errorf("task %s: command template: %w", name, err)
 	}
 	cmd := shellCommand(ctx, b.Dir, line, b.Env)
-	// Cancelling must end everything the line started, not only the shell:
-	// a killed sh left its `sleep 60` holding stdout, and Run waited the
-	// full minute for a stopped run (a test, 2026-10-04).
-	killGroupOnCancel(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -60,6 +56,11 @@ const maxArgLine = 100_000
 // `command`, its `when`, its command target) is built here. A line over
 // maxArgLine goes to `sh -s` on stdin instead; a command in it that reads
 // stdin reads the rest of the line.
+//
+// Cancelling ends everything the line started, not only the shell: a killed
+// sh left its `sleep 60` holding stdout, and Run waited the full minute for a
+// stopped run (a test, 2026-10-04); a target check cut at its cap left the
+// check's python running (memdoor LCB run, 2026-11-24).
 func shellCommand(ctx context.Context, dir, line string, env func() []string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if len(line) > maxArgLine {
@@ -72,6 +73,7 @@ func shellCommand(ctx context.Context, dir, line string, env func() []string) *e
 	if env != nil {
 		cmd.Env = env()
 	}
+	killGroupOnCancel(cmd)
 	return cmd
 }
 

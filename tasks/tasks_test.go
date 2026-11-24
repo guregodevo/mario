@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -844,5 +845,24 @@ func TestCompileLeavesARealCommentAndABlockAlone(t *testing.T) {
 		"nospace": "type: command\ncommand: echo '(#12)'\n",
 	}); err != nil {
 		t.Fatalf("refused:\n%v", err)
+	}
+}
+
+// A command target cut at its cap ends with its children: a check that ran a
+// slow brute force left it running after the target gave up (2026-11-24).
+func TestATargetCheckCutAtItsCapEndsItsChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no process groups on Windows")
+	}
+	defer func(d time.Duration) { targetCheckTimeout = d }(targetCheckTimeout)
+	targetCheckTimeout = 300 * time.Millisecond
+	root := t.TempDir()
+	e := &commandEndpoint{name: "check", dir: root, command: "(sleep 2; touch LATE) & wait"}
+	if e.Exists() {
+		t.Fatal("a target cut at its cap passed")
+	}
+	time.Sleep(3 * time.Second)
+	if _, err := os.Stat(filepath.Join(root, "LATE")); err == nil {
+		t.Fatal("the target's child ran on after the cap")
 	}
 }
